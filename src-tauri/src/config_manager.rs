@@ -1,12 +1,11 @@
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 // 全局資源基礎路徑
 static RESOURCE_BASE_PATH: OnceLock<PathBuf> = OnceLock::new();
-// 可寫入的使用者資料根目錄。Release 版不能直接寫入安裝目錄，
-// Mod 更新與使用者編輯的 YAML 都放在這裡。
+// 可寫入的使用者資料根目錄。帳號資料、Mod 更新與使用者編輯的 YAML 都放在這裡。
 static USER_DATA_BASE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn set_resource_base_path(path: PathBuf) {
@@ -17,7 +16,32 @@ pub fn set_user_data_base_path(path: PathBuf) {
     USER_DATA_BASE_PATH.set(path).ok();
 }
 
+/// 遊戲關卡素材的儲存根目錄。
+///
+/// 這和帳號／設定資料刻意分開：素材會放在安裝目錄（開發模式則放在
+/// 專案的 web/），例如 `<ReversedFront>/passionfruit/...`，不會寫入 AppData。
+pub fn get_resource_base_dir() -> PathBuf {
+    RESOURCE_BASE_PATH.get().cloned().unwrap_or_else(|| {
+        if cfg!(debug_assertions) {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("web")
+        } else {
+            std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+                .unwrap_or_else(|| PathBuf::from("."))
+        }
+    })
+}
+
 pub fn get_hidden_config_dir(target: &str) -> PathBuf {
+    if target == "passionfruit" {
+        let path = get_resource_base_dir().join("passionfruit");
+        fs::create_dir_all(&path).unwrap_or_default();
+        return path;
+    }
+
     // Dev mode: use local web folder
     #[cfg(debug_assertions)]
     {
@@ -26,9 +50,7 @@ pub fn get_hidden_config_dir(target: &str) -> PathBuf {
             path.pop();
         }
         path.push("web");
-        if target == "passionfruit" {
-            path.push("passionfruit");
-        } else if target == "root" {
+        if target == "root" {
             // Return web root
         } else {
             path.push("mod");
@@ -55,9 +77,7 @@ pub fn get_hidden_config_dir(target: &str) -> PathBuf {
                 .to_path_buf()
         };
 
-        if target == "passionfruit" {
-            path.push("passionfruit");
-        } else if target == "root" {
+        if target == "root" {
             // Return root
         } else {
             path.push("mod");

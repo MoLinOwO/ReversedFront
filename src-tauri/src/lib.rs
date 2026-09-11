@@ -113,6 +113,7 @@ async fn handle_passionfruit_request(
     let resource_key = path_str.to_string();
     let decoded_key = urlencoding::decode(&resource_key)
         .unwrap_or_default()
+        .trim_start_matches('/')
         .to_string();
 
     // 將 HTTP /passionfruit/... 的路徑統一映射成 ResourceManager 內部使用的
@@ -187,9 +188,17 @@ pub fn run() {
 
             println!("Web root directory: {:?}\n", web_root);
 
-            // 初始化配置和目錄
-            // 設置資源基礎路徑（用於配置檔案等）
-            config_manager::set_resource_base_path(web_root.clone());
+            // 初始化配置和目錄。素材快取放在執行檔所在的安裝目錄，
+            // 與使用者帳號／設定資料（AppData）分開。
+            let resource_storage_root = if cfg!(debug_assertions) {
+                web_root.clone()
+            } else {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+                    .unwrap_or_else(|| web_root.clone())
+            };
+            config_manager::set_resource_base_path(resource_storage_root);
 
             let app_data_dir = app
                 .path()
@@ -240,6 +249,14 @@ pub fn run() {
 
                 let passionfruit_route = warp::path("passionfruit")
                     .and(warp::path::tail())
+                    .and(resource_manager_filter.clone())
+                    .and_then(handle_passionfruit_request);
+
+                // 部分新版素材路徑帶有 assets/ 前綴，與 builtinAssets
+                // 的 passionfruit/ 路徑使用同一個快取與下載器。
+                let assets_passionfruit_route = warp::path("assets")
+                    .and(warp::path("passionfruit"))
+                    .and(warp::path::tail())
                     .and(resource_manager_filter)
                     .and_then(handle_passionfruit_request);
 
@@ -251,6 +268,7 @@ pub fn run() {
 
                 let routes = status_route
                     .or(passionfruit_route)
+                    .or(assets_passionfruit_route)
                     .or(static_route)
                     .with(cors);
 
@@ -269,6 +287,7 @@ pub fn run() {
             commands::save_yaml,
             commands::load_yaml,
             commands::check_resource_exists,
+            commands::download_resource,
             commands::get_resource_download_status,
             commands::exit_app,
             commands::save_config_volume,

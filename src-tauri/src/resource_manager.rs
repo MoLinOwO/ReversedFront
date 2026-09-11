@@ -34,10 +34,9 @@ pub struct ResourceManager {
 
 impl ResourceManager {
     pub fn new() -> Arc<Self> {
-        // Keep downloaded game resources in the same writable per-user data
-        // directory used by the rest of the desktop app. Never write the
-        // cache beside the executable or in the project checkout.
-        let base_dir = crate::config_manager::get_hidden_config_dir("root");
+        // Keep downloaded game resources beside the installed executable.
+        // Account data and Mod settings remain in the separate user-data DB.
+        let base_dir = crate::config_manager::get_resource_base_dir();
         // Ensure passionfruit directory exists
         let passionfruit_dir = base_dir.join("passionfruit");
         fs::create_dir_all(&passionfruit_dir).unwrap_or_default();
@@ -82,6 +81,14 @@ impl ResourceManager {
         };
 
         let trimmed = local_path.trim_start_matches('/');
+        let relative = Path::new(trimmed);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| component == std::path::Component::ParentDir)
+        {
+            return None;
+        }
         let normalized = trimmed.replace('/', std::path::MAIN_SEPARATOR_STR);
         let abs_path = self.base_dir.join(&normalized);
         Some((trimmed.to_string(), abs_path))

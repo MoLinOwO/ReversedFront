@@ -174,6 +174,29 @@ pub fn check_resource_exists(state: State<AppState>, resource_path: String) -> V
 }
 
 #[tauri::command]
+pub async fn download_resource(
+    state: State<'_, AppState>,
+    resource_path: String,
+) -> Result<Value, String> {
+    let is_passionfruit = resource_path.starts_with("passionfruit/")
+        || resource_path.starts_with("assets/passionfruit/");
+    if !is_passionfruit {
+        return Err("只允許下載 passionfruit 資源".to_string());
+    }
+
+    match state.resource_manager.get_or_fetch(&resource_path).await {
+        Ok(Some(response)) => Ok(serde_json::json!({
+            "exists": true,
+            "downloaded": true,
+            "path": response.local_path,
+            "absPath": response.abs_path
+        })),
+        Ok(None) => Err("找不到資源".to_string()),
+        Err(error) => Err(format!("資源下載失敗：{}", error)),
+    }
+}
+
+#[tauri::command]
 pub fn get_resource_download_status(state: State<AppState>) -> Value {
     let status = state.resource_manager.get_status();
     serde_json::to_value(status).unwrap()
