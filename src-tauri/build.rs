@@ -44,13 +44,8 @@ fn main() {
     fs::create_dir_all(&resources_path).expect("Failed to create resources dir");
 
     // Copy specific directories and files from web/ to src-tauri/resources/
-    let dirs_to_copy = vec!["tiles", "dexopt", "static"];
-    let files_to_copy = vec![
-        "index.html",
-        "desktop_bridge.js",
-        "manifest.json",
-        "transporter.html",
-    ];
+    let dirs_to_copy = vec!["tiles", "static"];
+    let files_to_copy = vec!["index.html", "desktop_bridge.js", "transporter.html"];
 
     // Copy directories
     for dir_name in dirs_to_copy {

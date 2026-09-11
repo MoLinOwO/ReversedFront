@@ -25,7 +25,7 @@
 3. `accounts.db` 不得進入專案或安裝資源。Windows 可攜目錄可寫時可放執行檔旁；macOS/Linux 與唯讀安裝位置必須退回平台資料目錄。
 4. `RFcity.yaml` 不得成為必要依賴。城市獎勵優先由遊戲即時資料取得，主線劇情掉落需排除；航線可以使用 `transportRoutes.json` 備援。
 5. 不得把 Mod 原始 JS 或 source map 推送至公開倉庫。每次提交／tag 前執行 `npm run validate:release`。
-6. `src-tauri/build.rs` 僅複製官方前端資源、編譯 bundle 與白名單 Mod data，不能直接複製整個開發目錄。
+6. Tauri 的 `frontendDist` 必須保持為 `src-tauri/web` 最小占位頁；`src-tauri/build.rs` 僅複製官方前端資源、編譯 bundle 與白名單 Mod data，不能直接複製整個開發目錄。
 
 ## 驗證順序
 

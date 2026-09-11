@@ -5,7 +5,7 @@
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
-    "frontendDist": "../web"
+    "frontendDist": "web"
   },
   "bundle": {
     "active": true,
@@ -20,11 +20,9 @@
     "resources": {
       "resources/index.html": "./",
       "resources/desktop_bridge.js": "./desktop_bridge.js",
-      "resources/manifest.json": "./",
       "resources/transporter.html": "./",
       "resources/static": "./static",
       "resources/tiles": "./tiles",
-      "resources/dexopt": "./dexopt",
       "resources/mod": "./mod"
     },
     "windows": {

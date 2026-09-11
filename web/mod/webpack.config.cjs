@@ -17,6 +17,11 @@ module.exports = {
     output: {
         filename: 'main.bundle.js',
         path: path.resolve(__dirname, 'js'),
+        // 原始碼與輸出共用此目錄；只清除舊 bundle，避免版本更新後殘留零引用 chunk。
+        clean: {
+            keep: asset => !asset.endsWith('.bundle.js')
+                && !asset.endsWith('.bundle.js.LICENSE.txt'),
+        },
     },
     optimization: {
         minimize: true,

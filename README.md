@@ -27,6 +27,8 @@ Node 依賴只由根目錄的 `package.json` 管理。`npm run mod:build` 會把
 
 `npm run validate:release` 會阻止 Mod 原始碼、source map、帳號資料、資料庫或憑證進入發版。GitHub Actions 在收到 `v*` tag 後，先執行此檢查，再為 Windows、Linux、macOS 打包並建立同一個 GitHub Release。
 
+Tauri 的 `frontendDist` 只指向 `src-tauri/web` 的最小占位頁；真正執行的前端由 `build.rs` 依白名單複製，避免整個開發目錄或未編譯 JS 被嵌入安裝包。
+
 桌面版與 Mod 都從 `ReversedFront_Public` 檢查更新，前端只顯示一個整合更新通知。Mod 下載只接受公開倉庫中編譯好的 bundle 與白名單資料檔；內建 Mod 基準版本會在編譯時自動對齊 Git commit。
 
 ## 發版

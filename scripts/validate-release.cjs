@@ -14,10 +14,17 @@ const trackedFiles = execFileSync('git', ['ls-files', '-z'], {
 
 const errors = [];
 const requiredFiles = [
+  'src-tauri/web/index.html',
   'web/mod/js/main.bundle.js',
   'web/mod/data/exit_prompts.yaml',
   'web/mod/data/transportRoutes.json'
 ];
+
+const tauriConfigPath = path.join(projectRoot, 'src-tauri/tauri.conf.json');
+const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8'));
+if (tauriConfig.build?.frontendDist !== 'web') {
+  errors.push('Tauri frontendDist 必須保持為 src-tauri/web，避免把完整 web/ 與 Mod 原始碼嵌入程式');
+}
 
 for (const required of requiredFiles) {
   if (!trackedFiles.includes(required)) {
