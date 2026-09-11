@@ -8,7 +8,8 @@
     "build": "tauri build",
     "dev": "tauri dev",
     "mod:build": "webpack --config web/mod/webpack.config.cjs --mode production",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "validate:release": "node scripts/validate-release.cjs",
+    "test": "npm run validate:release && cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "repository": {
     "type": "git",
@@ -18,6 +19,10 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "dependencies": {
+    "d3-delaunay": "^6.0.4",
+    "js-yaml": "^4.1.1"
+  },
   "bugs": {
     "url": "https://github.com/MoLinOwO/ReversedFront_Public/issues"
   },

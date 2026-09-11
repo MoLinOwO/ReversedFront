@@ -55,8 +55,11 @@
   }
 
   function emitAppMessage(action, data) {
+    // React Native sends desktop callbacks back to the RF bundle with `code`,
+    // not `action`.  The current bundle ignores PRELOAD:progress when this
+    // field is wrong, leaving the post-login loading screen without a route.
     window.dispatchEvent(new MessageEvent('message', {
-      data: JSON.stringify({ action: action, data: data })
+      data: JSON.stringify({ code: action, data: data })
     }));
   }
 
@@ -86,7 +89,8 @@
       var image = new Image();
       image.onload = update;
       image.onerror = update;
-      image.src = './passionfruit' + path;
+      var relativePath = String(path || '').replace(/^\/+/, '');
+      image.src = './passionfruit/' + relativePath;
     });
   }
 

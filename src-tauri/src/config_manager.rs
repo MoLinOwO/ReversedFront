@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 // 全局資源基礎路徑
 static RESOURCE_BASE_PATH: OnceLock<PathBuf> = OnceLock::new();
-// 可寫入的使用者資料根目錄。帳號資料、Mod 更新與使用者編輯的 YAML 都放在這裡。
+// 平台使用者資料根目錄，供標準安裝版的 Mod 更新、設定與舊資料遷移使用。
 static USER_DATA_BASE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn set_resource_base_path(path: PathBuf) {
@@ -16,10 +16,10 @@ pub fn set_user_data_base_path(path: PathBuf) {
     USER_DATA_BASE_PATH.set(path).ok();
 }
 
-/// 遊戲關卡素材的儲存根目錄。
+/// 帳號資料與遊戲關卡素材共用的可寫入執行期根目錄。
 ///
-/// 這和帳號／設定資料刻意分開：素材會放在安裝目錄（開發模式則放在
-/// 專案的 web/），例如 `<ReversedFront>/passionfruit/...`，不會寫入 AppData。
+/// 開發模式使用專案 web/；Windows 可攜版在執行檔旁。標準安裝目錄
+/// 不可寫，以及 macOS/Linux 發佈版，會由啟動流程設定為使用者資料目錄。
 pub fn get_resource_base_dir() -> PathBuf {
     RESOURCE_BASE_PATH.get().cloned().unwrap_or_else(|| {
         if cfg!(debug_assertions) {
@@ -57,7 +57,7 @@ pub fn get_hidden_config_dir(target: &str) -> PathBuf {
             path.push("data");
         }
         fs::create_dir_all(&path).unwrap_or_default();
-        return path;
+        path
     }
 
     // Release mode: use Tauri resource directory or exe parent
@@ -88,31 +88,35 @@ pub fn get_hidden_config_dir(target: &str) -> PathBuf {
     }
 }
 
-pub fn get_config_file() -> PathBuf {
-    get_hidden_config_dir("data").join("config.json")
-}
-
-/// 帳號資料永遠放在使用者資料目錄，不放進專案的 web 資源或 config.json。
-/// 這個資料庫只會在程式執行後由使用者端建立，因此不會被 Tauri 打包帶走。
-pub fn get_account_store_file() -> PathBuf {
-    let base = USER_DATA_BASE_PATH
+fn get_user_data_base_dir() -> PathBuf {
+    USER_DATA_BASE_PATH
         .get()
         .cloned()
         .or_else(|| {
             directories::ProjectDirs::from("com", "MoLinOwO", "ReversedFront")
                 .map(|dirs| dirs.data_local_dir().to_path_buf())
         })
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-    base.join("accounts.db")
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-/// 舊版帳號檔案的位置，只供第一次啟動時匯入，之後不再作為資料來源。
+pub fn get_config_file() -> PathBuf {
+    get_hidden_config_dir("data").join("config.json")
+}
+
+/// SQLite 帳號庫放在選定的執行期資料根目錄。可攜版可以隨程式目錄移動，
+/// 標準安裝則落在使用者資料目錄，避免 macOS/Linux 或 Program Files 無法寫入。
+pub fn get_account_store_file() -> PathBuf {
+    get_resource_base_dir().join("accounts.db")
+}
+
+/// 舊版 JSON 帳號檔案的位置，只供第一次啟動時匯入。
 pub fn get_legacy_account_store_file() -> PathBuf {
-    get_account_store_file()
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("accounts.json")
+    get_user_data_base_dir().join("accounts.json")
+}
+
+/// 先前版本放在使用者資料目錄的 SQLite 帳號庫，只供一次性遷移使用。
+pub fn get_legacy_account_db_file() -> PathBuf {
+    get_user_data_base_dir().join("accounts.db")
 }
 
 pub fn load_config() -> Value {

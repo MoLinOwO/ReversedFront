@@ -5,16 +5,91 @@ pub mod mod_updater;
 pub mod resource_manager;
 pub mod updater;
 
+use fs2::FileExt;
 use resource_manager::ResourceManager;
 use std::fs;
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use warp::{http::Response, http::StatusCode, Filter};
 
 pub struct AppState {
     pub resource_manager: Arc<ResourceManager>,
-    pub server_base_url: String,
+    // 持有期間即代表這個跨程序槽位仍被使用；File drop 時 OS 會釋放鎖。
+    _process_slot_lock: fs::File,
+}
+
+const MAX_PROCESS_SLOTS: usize = 64;
+
+fn acquire_process_slot(app_data_dir: &Path) -> io::Result<(usize, fs::File)> {
+    let lock_dir = app_data_dir.join("process-locks");
+    fs::create_dir_all(&lock_dir)?;
+
+    for slot in 0..MAX_PROCESS_SLOTS {
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(lock_dir.join(format!("slot-{slot}.lock")))?;
+        match file.try_lock_exclusive() {
+            Ok(()) => return Ok((slot, file)),
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || cfg!(target_os = "windows") && error.raw_os_error() == Some(33) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AddrInUse,
+        "ReversedFront process slots are exhausted",
+    ))
+}
+
+fn directory_is_writable(path: &Path) -> bool {
+    if fs::create_dir_all(path).is_err() {
+        return false;
+    }
+    let probe = path.join(format!(".rf-write-probe-{}", std::process::id()));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn runtime_storage_root(web_root: &Path, app_data_dir: &Path) -> PathBuf {
+    if cfg!(debug_assertions) {
+        return web_root.to_path_buf();
+    }
+
+    // Windows 可攜版優先沿用「執行檔旁」的資料配置；標準安裝若目錄
+    // 不可寫則退回 AppData。macOS app bundle 與 Linux AppImage/deb 不應
+    // 寫入程式本體，因此一律使用使用者資料目錄。
+    if cfg!(target_os = "windows") {
+        if let Some(executable_dir) = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+        {
+            if directory_is_writable(&executable_dir) {
+                return executable_dir;
+            }
+        }
+    }
+
+    app_data_dir.join("runtime")
 }
 
 // 提供靜態前端檔案
@@ -176,9 +251,12 @@ pub fn run() {
             // 開發 / 生產共用：決定前端資源根目錄
             let web_root = if cfg!(debug_assertions) {
                 // 開發模式：使用專案目錄下的 web/
-                std::env::current_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                    .join("web")
+                let mut project_root =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                if project_root.ends_with("src-tauri") {
+                    project_root.pop();
+                }
+                project_root.join("web")
             } else {
                 // 生產模式：使用 Tauri 的資源目錄
                 app.path()
@@ -188,22 +266,13 @@ pub fn run() {
 
             println!("Web root directory: {:?}\n", web_root);
 
-            // 初始化配置和目錄。素材快取放在執行檔所在的安裝目錄，
-            // 與使用者帳號／設定資料（AppData）分開。
-            let resource_storage_root = if cfg!(debug_assertions) {
-                web_root.clone()
-            } else {
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
-                    .unwrap_or_else(|| web_root.clone())
-            };
-            config_manager::set_resource_base_path(resource_storage_root);
-
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("Failed to get application data directory");
+            let (process_slot, process_slot_lock) = acquire_process_slot(&app_data_dir)?;
+            let resource_storage_root = runtime_storage_root(&web_root, &app_data_dir);
+            config_manager::set_resource_base_path(resource_storage_root);
             config_manager::set_user_data_base_path(app_data_dir.clone());
             let mod_update_root = app_data_dir.join("mod");
             let _ = fs::create_dir_all(mod_update_root.join("js"));
@@ -222,58 +291,82 @@ pub fn run() {
             }
 
             let resource_manager = ResourceManager::new();
-            app.manage(AppState {
-                resource_manager: resource_manager.clone(),
-                server_base_url: "http://127.0.0.1:8765".to_string(),
-            });
 
-            // === 步驟 3: 啟動 HTTP 伺服器 ===
-            let resource_manager_filter = warp::any().map(move || resource_manager.clone());
+            // 每個 ReversedFront 程序使用獨立的 loopback port，避免多開時
+            // 第二個程序綁定失敗或誤載入第一個程序的前端資源。
+            let server_resource_manager = resource_manager.clone();
+            let resource_manager_filter = warp::any().map(move || server_resource_manager.clone());
             let resource_manager_filter_status = resource_manager_filter.clone();
 
-            tauri::async_runtime::spawn(async move {
-                println!("=== Starting HTTP Server ===");
-                println!("Server: http://127.0.0.1:8765/");
-                println!("Frontend root: {:?}\n", web_root);
-
-                let cors = warp::cors()
-                    .allow_any_origin()
-                    .allow_methods(vec!["GET", "POST", "OPTIONS"]);
-
-                let status_route = warp::path("status")
-                    .and(resource_manager_filter_status)
-                    .map(|rm: Arc<ResourceManager>| {
-                        let status = rm.get_status();
-                        warp::reply::json(&status)
-                    });
-
-                let passionfruit_route = warp::path("passionfruit")
-                    .and(warp::path::tail())
-                    .and(resource_manager_filter.clone())
-                    .and_then(handle_passionfruit_request);
-
-                // 部分新版素材路徑帶有 assets/ 前綴，與 builtinAssets
-                // 的 passionfruit/ 路徑使用同一個快取與下載器。
-                let assets_passionfruit_route = warp::path("assets")
-                    .and(warp::path("passionfruit"))
-                    .and(warp::path::tail())
-                    .and(resource_manager_filter)
-                    .and_then(handle_passionfruit_request);
-
-                let static_route = warp::path::tail().and_then(move |path: warp::path::Tail| {
-                    let web_root = web_root.clone();
-                    let mod_update_root = mod_update_root.clone();
-                    async move { handle_static_file(path, web_root, mod_update_root).await }
+            let status_route = warp::path("status")
+                .and(resource_manager_filter_status)
+                .map(|rm: Arc<ResourceManager>| {
+                    let status = rm.get_status();
+                    warp::reply::json(&status)
                 });
 
-                let routes = status_route
-                    .or(passionfruit_route)
-                    .or(assets_passionfruit_route)
-                    .or(static_route)
-                    .with(cors);
+            let passionfruit_route = warp::path("passionfruit")
+                .and(warp::path::tail())
+                .and(resource_manager_filter.clone())
+                .and_then(handle_passionfruit_request);
 
-                warp::serve(routes).run(([127, 0, 0, 1], 8765)).await;
+            // 部分新版素材路徑帶有 assets/ 前綴，與 builtinAssets
+            // 的 passionfruit/ 路徑使用同一個快取與下載器。
+            let assets_passionfruit_route = warp::path("assets")
+                .and(warp::path("passionfruit"))
+                .and(warp::path::tail())
+                .and(resource_manager_filter)
+                .and_then(handle_passionfruit_request);
+
+            let static_route = warp::path::tail().and_then(move |path: warp::path::Tail| {
+                let web_root = web_root.clone();
+                let mod_update_root = mod_update_root.clone();
+                async move { handle_static_file(path, web_root, mod_update_root).await }
             });
+
+            let routes = status_route
+                .or(passionfruit_route)
+                .or(assets_passionfruit_route)
+                .or(static_route);
+            // hyper 會在 bind 時取得目前的 Tokio reactor，因此即使回傳的
+            // server 日後才 spawn，綁定本身也必須在 Tauri async runtime 內執行。
+            let (server_address, server) = tauri::async_runtime::block_on(async move {
+                warp::serve(routes).bind_ephemeral(([127, 0, 0, 1], 0))
+            });
+            let server_base_url = format!("http://{}", server_address);
+
+            app.manage(AppState {
+                resource_manager: resource_manager.clone(),
+                _process_slot_lock: process_slot_lock,
+            });
+
+            println!("=== Starting HTTP Server ===");
+            println!("Server: {server_base_url}/");
+            tauri::async_runtime::spawn(server);
+
+            // 主視窗也使用每程序獨立的 WebView 儲存區，讓 cookie、
+            // localStorage 與登入 session 不會在多個程式程序之間互相覆蓋。
+            let session_dir = app_data_dir
+                .join("account-slots")
+                .join(process_slot.to_string());
+            fs::create_dir_all(&session_dir)?;
+            let webview_url = WebviewUrl::External(
+                format!("{server_base_url}/?rf_account_slot={process_slot}").parse()?,
+            );
+            let builder = WebviewWindowBuilder::new(app, "main", webview_url)
+                .title("ReversedFront")
+                .inner_size(1280.0, 720.0)
+                .min_inner_size(800.0, 600.0)
+                .resizable(true)
+                .fullscreen(false)
+                .data_directory(session_dir);
+
+            #[cfg(target_os = "macos")]
+            let builder = builder.data_store_identifier(commands::process_data_store_identifier(
+                &format!("main-slot:{process_slot}"),
+            ));
+
+            builder.build()?;
 
             Ok(())
         })
@@ -281,9 +374,7 @@ pub fn run() {
             commands::get_accounts,
             commands::add_account,
             commands::delete_account,
-            commands::set_active_account,
             commands::get_active_account,
-            commands::open_account_window,
             commands::save_yaml,
             commands::load_yaml,
             commands::check_resource_exists,
@@ -304,4 +395,25 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acquire_process_slot;
+
+    #[test]
+    fn simultaneous_instances_receive_distinct_slots() {
+        let directory =
+            std::env::temp_dir().join(format!("reversedfront-slot-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+
+        let (first_slot, first_lock) = acquire_process_slot(&directory).unwrap();
+        let (second_slot, second_lock) = acquire_process_slot(&directory).unwrap();
+
+        assert_eq!(first_slot, 0);
+        assert_eq!(second_slot, 1);
+        drop(second_lock);
+        drop(first_lock);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }

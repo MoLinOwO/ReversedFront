@@ -4,7 +4,8 @@ use crate::mod_updater;
 use crate::AppState;
 use serde_json::Value;
 use std::fs;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use std::path::{Component, Path};
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
 pub fn get_accounts() -> Vec<Value> {
@@ -26,15 +27,11 @@ pub fn delete_account(idx: usize) -> bool {
 }
 
 #[tauri::command]
-pub fn set_active_account(idx: usize) -> bool {
-    account_manager::set_active_account(idx)
-}
-
-#[tauri::command]
 pub fn get_active_account() -> Option<Value> {
     account_manager::get_active_account()
 }
 
+#[cfg(target_os = "macos")]
 fn stable_account_hash(account: &str, salt: &str) -> u64 {
     // 使用固定 FNV-1a，確保不同進程／重新啟動後仍會得到同一個 session 目錄。
     let mut hash = 0xcbf29ce484222325u64;
@@ -55,96 +52,45 @@ pub(crate) fn process_data_store_identifier(seed: &str) -> [u8; 16] {
     identifier
 }
 
-/// 開啟指定帳號的獨立桌面視窗。
-/// 每個視窗使用自己的 WebView 資料目錄／macOS data store，因此 cookie、
-/// localStorage、WebSocket 登入狀態不會與主視窗或其他帳號視窗共用。
-#[tauri::command]
-pub fn open_account_window(
-    app: AppHandle,
-    state: State<AppState>,
-    account_index: usize,
-) -> Result<(), String> {
-    let accounts = account_manager::get_accounts();
-    let account = accounts
-        .get(account_index)
-        .and_then(|value| value.get("account"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "找不到指定帳號".to_string())?;
-
-    let account_hash = stable_account_hash(account, "ReversedFront-account-window");
-    let label = format!("rf-account-{account_hash:016x}");
-    if let Some(window) = app.get_webview_window(&label) {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
-    }
-
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("無法取得帳號視窗資料目錄：{error}"))?;
-    let session_dir = app_data_dir
-        .join("account-sessions")
-        .join(format!("{}-{account_hash:016x}", std::process::id()));
-    fs::create_dir_all(&session_dir)
-        .map_err(|error| format!("無法建立帳號視窗資料目錄：{error}"))?;
-
-    let encoded_account = urlencoding::encode(account);
-    let url = format!(
-        "{}/?rf_account={}#/users/log_in",
-        state.server_base_url, encoded_account
-    );
-    let webview_url = WebviewUrl::External(
-        url.parse()
-            .map_err(|error| format!("帳號視窗網址無效：{error}"))?,
-    );
-
-    let builder = WebviewWindowBuilder::new(&app, &label, webview_url)
-        .title("ReversedFront")
-        .inner_size(1280.0, 720.0)
-        .min_inner_size(800.0, 600.0)
-        .resizable(true)
-        .data_directory(session_dir);
-
-    #[cfg(target_os = "macos")]
-    let builder = {
-        let process_seed = format!("{}:{account}", std::process::id());
-        builder.data_store_identifier(process_data_store_identifier(&process_seed))
-    };
-
-    builder
-        .build()
-        .map_err(|error| format!("無法開啟帳號視窗：{error}"))?;
-    Ok(())
-}
-
 #[tauri::command]
 pub fn save_yaml(filename: String, content: String) -> bool {
-    // Simplified: just write to file in mod/data or similar
-    // Python implementation used yaml_utils.save_yaml
-    // We need to check where it saves.
-    // Assuming it saves to mod/data/filename
+    let Some(filename) = safe_data_filename(&filename) else {
+        return false;
+    };
     let path = config_manager::get_hidden_config_dir("data").join(filename);
     fs::write(path, content).is_ok()
 }
 
+fn safe_data_filename(filename: &str) -> Option<&str> {
+    let requested = Path::new(filename);
+    let valid_extension = requested
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "yaml" | "yml" | "json"
+            )
+        });
+    let is_single_relative_file = !requested.is_absolute()
+        && requested
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+        && requested
+            .parent()
+            .is_none_or(|parent| parent.as_os_str().is_empty());
+
+    (valid_extension && is_single_relative_file).then_some(filename)
+}
+
 #[tauri::command]
 pub fn load_yaml(app: AppHandle, filename: String) -> Option<String> {
-    // 只允許載入資料檔名，避免這個通用命令被用來讀取任意路徑。
-    let requested = std::path::Path::new(&filename);
-    if requested.is_absolute()
-        || requested
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return None;
-    }
+    // 儲存與載入共用相同白名單，避免兩個命令的路徑規則漂移。
+    let filename = safe_data_filename(&filename)?;
 
     // 使用者資料優先，讓使用者可以自訂退出提示詞；沒有自訂檔時再讀取
     // 安裝包內的 mod/data 預設檔。這修正 Release 版只會拿到 fallback 的問題。
-    let user_path = config_manager::get_hidden_config_dir("data").join(&filename);
+    let user_path = config_manager::get_hidden_config_dir("data").join(filename);
     if let Ok(content) = fs::read_to_string(user_path) {
         return Some(content);
     }
@@ -153,7 +99,7 @@ pub fn load_yaml(app: AppHandle, filename: String) -> Option<String> {
         .path()
         .resource_dir()
         .ok()
-        .map(|root| root.join("mod").join("data").join(&filename))?;
+        .map(|root| root.join("mod").join("data").join(filename))?;
     fs::read_to_string(resource_path).ok()
 }
 
@@ -318,5 +264,27 @@ pub fn toggle_fullscreen(app: AppHandle) -> Result<bool, String> {
         Ok(!is_fullscreen)
     } else {
         Err("Main window not found".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_data_filename;
+
+    #[test]
+    fn accepts_supported_data_files() {
+        assert_eq!(
+            safe_data_filename("exit_prompts.yaml"),
+            Some("exit_prompts.yaml")
+        );
+        assert_eq!(safe_data_filename("routes.JSON"), Some("routes.JSON"));
+    }
+
+    #[test]
+    fn rejects_paths_and_unsupported_extensions() {
+        assert_eq!(safe_data_filename("../accounts.db"), None);
+        assert_eq!(safe_data_filename("folder/data.yaml"), None);
+        assert_eq!(safe_data_filename("script.js"), None);
+        assert_eq!(safe_data_filename(""), None);
     }
 }

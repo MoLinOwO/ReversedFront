@@ -1,10 +1,13 @@
 use anyhow::{bail, Context, Result};
+use fs2::FileExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager};
 
 const REPOSITORY: &str = "MoLinOwO/ReversedFront_Public";
@@ -13,8 +16,9 @@ const RAW_BASE: &str = "https://raw.githubusercontent.com/MoLinOwO/ReversedFront
 
 // 目前隨桌面版內附的公開倉庫版本。沒有本機 update.json 時，
 // 以這個版本作為基準，避免第一次啟動就把目前的 Mod 覆蓋掉。
-const BUNDLED_REF: &str = "7bfd9ad4d56362c2f0fc9fffc34cb91d5b776d39";
+const BUNDLED_REF: &str = env!("RF_BUNDLED_REF");
 const MAX_FILE_SIZE: u64 = 16 * 1024 * 1024;
+static UPDATE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
 struct CommitResponse {
@@ -171,10 +175,11 @@ async fn download_and_install_inner(app: &AppHandle, remote_ref: &str) -> Result
     }
 
     let root = update_root(app)?;
-    let stage = root.join(format!(".staging-{remote_ref}"));
-    if stage.exists() {
-        fs::remove_dir_all(&stage)?;
-    }
+    let sequence = UPDATE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let stage = root.join(format!(
+        ".staging-{remote_ref}-{}-{sequence}",
+        std::process::id()
+    ));
     fs::create_dir_all(&stage)?;
 
     // 所有檔案先下載到 staging，完整成功後才套用，避免網路中斷留下半套 Mod。
@@ -205,6 +210,18 @@ async fn download_and_install_inner(app: &AppHandle, remote_ref: &str) -> Result
         .iter()
         .filter_map(|entry| safe_relative_path(&entry.path).map(ToOwned::to_owned))
         .collect();
+
+    // 下載不持鎖；只有套用階段使用跨程序排他鎖。這樣多個桌面程序
+    // 同時偵測到更新時，不會一邊刪除另一邊正在套用的 bundle。
+    let lock_path = root.join(".update.lock");
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)?;
+    lock_file.lock_exclusive()?;
+
     let js_root = root.join("js");
     if js_root.exists() {
         for entry in fs::read_dir(&js_root)?.flatten() {
@@ -231,6 +248,7 @@ async fn download_and_install_inner(app: &AppHandle, remote_ref: &str) -> Result
             ref_name: remote_ref.to_string(),
         })?,
     )?;
+    FileExt::unlock(&lock_file)?;
 
     Ok(json!({
         "updated": true,
@@ -248,7 +266,9 @@ fn copy_staged_files(stage: &Path, root: &Path) -> Result<()> {
         let destination = root.join(relative);
         if source.is_dir() {
             fs::create_dir_all(&destination)?;
-            copy_staged_files(&source, root)?;
+            // 遞迴時目的地也必須進入同名子目錄。若仍傳入 root，
+            // stage/js/main.bundle.js 會被錯誤攤平成 root/main.bundle.js。
+            copy_staged_files(&source, &destination)?;
         } else {
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
@@ -257,4 +277,54 @@ fn copy_staged_files(stage: &Path, root: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_directory(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "reversedfront-{name}-{}-{}",
+            std::process::id(),
+            UPDATE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn validates_update_paths() {
+        assert!(allowed_path("web/mod/js/main.bundle.js"));
+        assert!(allowed_path("web/mod/data/transportRoutes.json"));
+        assert!(!allowed_path("web/mod/js/core/api.js"));
+        assert!(!allowed_path("web/mod/data/RFcity.yaml"));
+        assert_eq!(
+            safe_relative_path("web/mod/js/main.bundle.js"),
+            Some("js/main.bundle.js")
+        );
+        assert_eq!(safe_relative_path("web/mod/../secret.json"), None);
+    }
+
+    #[test]
+    fn staged_copy_preserves_subdirectories() {
+        let base = test_directory("staged-copy");
+        let stage = base.join("stage");
+        let destination = base.join("destination");
+        fs::create_dir_all(stage.join("js")).unwrap();
+        fs::create_dir_all(stage.join("data")).unwrap();
+        fs::write(stage.join("js/main.bundle.js"), b"bundle").unwrap();
+        fs::write(stage.join("data/routes.json"), b"{}").unwrap();
+
+        copy_staged_files(&stage, &destination).unwrap();
+
+        assert_eq!(
+            fs::read(destination.join("js/main.bundle.js")).unwrap(),
+            b"bundle"
+        );
+        assert_eq!(
+            fs::read(destination.join("data/routes.json")).unwrap(),
+            b"{}"
+        );
+        assert!(!destination.join("main.bundle.js").exists());
+        fs::remove_dir_all(base).unwrap();
+    }
 }

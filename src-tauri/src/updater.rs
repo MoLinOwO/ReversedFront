@@ -298,3 +298,26 @@ pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> 
     app.exit(0);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_version, is_newer};
+
+    #[test]
+    fn extracts_semantic_versions() {
+        assert_eq!(extract_version("v3.1.2"), Some("3.1.2".to_string()));
+        assert_eq!(
+            extract_version("ReversedFront_v10.20.30.exe"),
+            Some("10.20.30".to_string())
+        );
+        assert_eq!(extract_version("latest"), None);
+    }
+
+    #[test]
+    fn compares_versions_by_component() {
+        assert!(is_newer("3.2.0", "3.1.9"));
+        assert!(is_newer("3.1.1", "3.1"));
+        assert!(!is_newer("3.1.0", "3.1"));
+        assert!(!is_newer("2.9.9", "3.0.0"));
+    }
+}

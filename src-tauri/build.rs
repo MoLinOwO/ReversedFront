@@ -1,6 +1,30 @@
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+
+const FALLBACK_BUNDLED_REF: &str = "7bfd9ad4d56362c2f0fc9fffc34cb91d5b776d39";
+
+fn is_git_sha(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn bundled_ref(root_path: &Path) -> String {
+    let github_sha = env::var("GITHUB_SHA").ok();
+    let git_sha = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root_path)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned());
+
+    github_sha
+        .or(git_sha)
+        .filter(|value| is_git_sha(value))
+        .unwrap_or_else(|| FALLBACK_BUNDLED_REF.to_owned())
+}
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -9,6 +33,8 @@ fn main() {
     let resources_path = Path::new(&manifest_dir).join("resources");
 
     println!("cargo:rerun-if-changed=../web");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    println!("cargo:rustc-env=RF_BUNDLED_REF={}", bundled_ref(root_path));
 
     // Clean resources dir if it exists
     if resources_path.exists() {
@@ -31,7 +57,8 @@ fn main() {
         let src = web_path.join(dir_name);
         let dst = resources_path.join(dir_name);
         if src.exists() {
-            copy_dir_recursive(&src, &dst).expect(&format!("Failed to copy {}", dir_name));
+            copy_dir_recursive(&src, &dst)
+                .unwrap_or_else(|error| panic!("Failed to copy {dir_name}: {error}"));
         }
     }
 
@@ -40,7 +67,8 @@ fn main() {
         let src = web_path.join(file_name);
         let dst = resources_path.join(file_name);
         if src.exists() {
-            fs::copy(&src, &dst).expect(&format!("Failed to copy {}", file_name));
+            fs::copy(&src, &dst)
+                .unwrap_or_else(|error| panic!("Failed to copy {file_name}: {error}"));
         }
     }
 

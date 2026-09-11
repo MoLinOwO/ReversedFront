@@ -5,11 +5,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 
 const SERVER_BASE_URL: &str = "https://media.komisureiya.com/";
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,9 +49,9 @@ impl ResourceManager {
             .unwrap();
 
         let cpu_count = num_cpus::get();
-        let max_workers = std::cmp::max(4, std::cmp::min(cpu_count * 2, 32));
+        let max_workers = (cpu_count * 2).clamp(4, 32);
 
-        let manager = Arc::new(ResourceManager {
+        Arc::new(ResourceManager {
             client,
             base_dir,
             downloaded_resources: Mutex::new(HashSet::new()),
@@ -58,9 +60,7 @@ impl ResourceManager {
             downloaded_count: Mutex::new(0),
             semaphore: Arc::new(Semaphore::new(max_workers)),
             max_workers,
-        });
-
-        manager
+        })
     }
 
     fn normalize_path(&self, resource_path: &str) -> Option<(String, PathBuf)> {
@@ -74,8 +74,8 @@ impl ResourceManager {
         };
 
         // Drop duplicated prefix
-        let local_path = if clean.starts_with("assets/") {
-            &clean["assets/".len()..]
+        let local_path = if let Some(stripped) = clean.strip_prefix("assets/") {
+            stripped
         } else {
             clean
         };
@@ -158,9 +158,9 @@ impl ResourceManager {
             None
         };
 
-        // If another fetch is already running, wait a bit to see if file appears
+        // 同程序內相同資源只允許一個下載者；其他請求等待該下載完成。
         if !inserted {
-            for _ in 0..20 {
+            for _ in 0..600 {
                 if abs_path.exists() {
                     let bytes = fs::read(&abs_path)?;
                     self.downloaded_resources
@@ -169,13 +169,20 @@ impl ResourceManager {
                         .insert(local_path.to_string());
                     return Ok(bytes);
                 }
+                if !self.inflight.lock().unwrap().contains(local_path) {
+                    break;
+                }
                 sleep(Duration::from_millis(50)).await;
             }
+            if abs_path.exists() {
+                return Ok(fs::read(&abs_path)?);
+            }
+            bail!("concurrent resource download failed: {}", local_path);
         }
 
         // Strip passionfruit/ prefix for remote URL if present, as the server likely serves from root
-        let url_path = if local_path.starts_with("passionfruit/") {
-            &local_path["passionfruit/".len()..]
+        let url_path = if let Some(stripped) = local_path.strip_prefix("passionfruit/") {
+            stripped
         } else {
             local_path
         };
@@ -193,10 +200,24 @@ impl ResourceManager {
             fs::create_dir_all(parent)?;
         }
 
-        let temp_path = abs_path.with_extension("download");
+        // 多個 ReversedFront 程序可能同時下載同一檔案，暫存檔名必須唯一。
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temp_path =
+            abs_path.with_extension(format!("download-{}-{}", std::process::id(), sequence));
         let mut file = fs::File::create(&temp_path)?;
         file.write_all(&bytes)?;
-        fs::rename(&temp_path, &abs_path)?;
+        file.flush()?;
+        drop(file);
+        if let Err(error) = fs::rename(&temp_path, &abs_path) {
+            // 另一程序可能已經先完成相同檔案；Windows 不允許 rename
+            // 覆蓋既有檔案，因此直接採用已完成的版本。
+            if abs_path.exists() {
+                let _ = fs::remove_file(&temp_path);
+                return Ok(fs::read(&abs_path)?);
+            }
+            let _ = fs::remove_file(&temp_path);
+            return Err(error.into());
+        }
 
         self.downloaded_resources
             .lock()

@@ -2,7 +2,7 @@ use crate::config_manager;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const SCHEMA: &str = r#"
@@ -283,10 +283,86 @@ fn purge_legacy_config_accounts() {
     }
 }
 
+fn import_legacy_database(
+    connection: &mut Connection,
+    legacy_path: &Path,
+) -> rusqlite::Result<bool> {
+    if !legacy_path.exists() || legacy_path == database_path().as_path() {
+        return Ok(false);
+    }
+
+    let legacy = match Connection::open(legacy_path) {
+        Ok(connection) => connection,
+        Err(_) => return Ok(false),
+    };
+
+    let mut statement = match legacy.prepare(
+        "SELECT account, password, profile_json, settings_json
+         FROM accounts ORDER BY id ASC",
+    ) {
+        Ok(statement) => statement,
+        Err(_) => return Ok(false),
+    };
+    let mut rows = statement.query([])?;
+    let mut accounts = Vec::new();
+    while let Some(row) = rows.next()? {
+        accounts.push(value_from_row(
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+        ));
+    }
+    drop(rows);
+    drop(statement);
+
+    if accounts.is_empty() {
+        return Ok(false);
+    }
+
+    let active_name = legacy
+        .query_row(
+            "SELECT value FROM app_state WHERE key = 'active_account'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let tx = connection.transaction()?;
+    let mut first_imported_name = None;
+    for account in &accounts {
+        if insert_legacy_account(&tx, account)? && first_imported_name.is_none() {
+            first_imported_name = account_name(account).map(ToOwned::to_owned);
+        }
+    }
+    let selected = active_name
+        .filter(|name| {
+            tx.query_row(
+                "SELECT 1 FROM accounts WHERE account = ?1",
+                params![name],
+                |_| Ok(()),
+            )
+            .is_ok()
+        })
+        .or(first_imported_name)
+        .or_else(|| first_account_name(&tx).ok().flatten());
+    set_state(&tx, "active_account", selected.as_deref())?;
+    tx.commit()?;
+    Ok(true)
+}
+
 fn migrate_legacy_data(connection: &mut Connection) -> rusqlite::Result<()> {
     let account_count: i64 =
         connection.query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))?;
     let legacy_path = config_manager::get_legacy_account_store_file();
+
+    if account_count == 0
+        && import_legacy_database(connection, &config_manager::get_legacy_account_db_file())?
+    {
+        // 保留舊的使用者資料庫作為備份；之後以安裝目錄內的新 DB 為唯一來源。
+        purge_legacy_config_accounts();
+        return Ok(());
+    }
 
     let (accounts, active_name, imported_json) = if account_count == 0 {
         let (json_accounts, json_active, imported_json) = legacy_json_source();
@@ -387,17 +463,6 @@ pub fn delete_account(index: usize) -> bool {
         } else {
             normalize_active_account(tx)?;
         }
-        Ok(true)
-    })
-    .unwrap_or(false)
-}
-
-pub fn set_active_account(index: usize) -> bool {
-    with_transaction(|tx| {
-        let Some(name) = account_name_at(tx, index)? else {
-            return Ok(false);
-        };
-        set_state(tx, "active_account", Some(&name))?;
         Ok(true)
     })
     .unwrap_or(false)

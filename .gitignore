@@ -52,6 +52,11 @@ main.dist/
 *.key
 config.json
 accounts.json
+accounts.db
+**/accounts.db
+*.db-journal
+*.db-wal
+*.db-shm
 web/mod/data/*.pfx
 web/mod/data/config.json
 web/mod/data/accounts.json

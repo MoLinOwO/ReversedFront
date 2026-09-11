@@ -34,6 +34,9 @@ jobs:
         with:
           node-version: lts/*
 
+      - name: Validate public release contents
+        run: node scripts/validate-release.cjs
+
       - name: Sync application version from tag
         run: node scripts/set-version.cjs
 

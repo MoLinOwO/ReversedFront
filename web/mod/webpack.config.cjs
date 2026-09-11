@@ -6,6 +6,14 @@ module.exports = {
     context: __dirname,
     mode: 'production',
     entry: './js/index.js',
+    module: {
+        rules: [
+            {
+                test: /\.js$/,
+                type: 'javascript/auto',
+            },
+        ],
+    },
     output: {
         filename: 'main.bundle.js',
         path: path.resolve(__dirname, 'js'),

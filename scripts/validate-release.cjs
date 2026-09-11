@@ -1,0 +1,74 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+const projectRoot = path.resolve(__dirname, '..');
+const trackedFiles = execFileSync('git', ['ls-files', '-z'], {
+  cwd: projectRoot,
+  encoding: 'utf8'
+})
+  .split('\0')
+  .filter(Boolean)
+  .map(file => file.replaceAll('\\', '/'))
+  .filter(file => fs.existsSync(path.join(projectRoot, file)));
+
+const errors = [];
+const requiredFiles = [
+  'web/mod/js/main.bundle.js',
+  'web/mod/data/exit_prompts.yaml',
+  'web/mod/data/transportRoutes.json'
+];
+
+for (const required of requiredFiles) {
+  if (!trackedFiles.includes(required)) {
+    errors.push(`缺少發版必要檔案：${required}`);
+  }
+}
+
+for (const file of trackedFiles) {
+  const lower = file.toLowerCase();
+  if (file.startsWith('web/mod/js/')) {
+    const relative = file.slice('web/mod/js/'.length);
+    const isRootFile = !relative.includes('/');
+    const isCompiledBundle = relative.endsWith('.bundle.js')
+      || relative.endsWith('.bundle.js.LICENSE.txt');
+    if (!isRootFile || !isCompiledBundle) {
+      errors.push(`公開倉庫不得包含 Mod JS 原始碼：${file}`);
+    }
+  }
+
+  if (
+    lower.endsWith('.pfx')
+    || lower.endsWith('.p12')
+    || lower.endsWith('.pem')
+    || lower.endsWith('.key')
+    || lower.endsWith('.db')
+    || lower.endsWith('.db-wal')
+    || lower.endsWith('.db-shm')
+    || lower.endsWith('/accounts.json')
+    || lower.endsWith('/config.json')
+    || lower === 'accounts.json'
+    || lower === 'config.json'
+  ) {
+    errors.push(`公開倉庫不得包含憑證或使用者資料：${file}`);
+  }
+
+  if (lower.endsWith('.map') && file.startsWith('web/mod/')) {
+    errors.push(`公開倉庫不得包含 Mod source map：${file}`);
+  }
+}
+
+const bundlePath = path.join(projectRoot, 'web/mod/js/main.bundle.js');
+if (fs.existsSync(bundlePath)) {
+  const bundle = fs.readFileSync(bundlePath, 'utf8');
+  if (/sourceMappingURL\s*=/.test(bundle)) {
+    errors.push('main.bundle.js 不得引用 source map');
+  }
+}
+
+if (errors.length > 0) {
+  console.error(errors.map(error => `- ${error}`).join('\n'));
+  process.exit(1);
+}
+
+console.log(`發版檢查通過：${trackedFiles.length} 個追蹤檔案，Mod 僅包含編譯 bundle。`);
