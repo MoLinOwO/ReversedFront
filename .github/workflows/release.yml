@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Sync application version from tag
+        run: node scripts/set-version.cjs
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libwebkit2gtk-4.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libjavascriptcoregtk-4.0-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libsoup-3.0-dev
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version '^2.0.0' --locked
+
+      # Mod 原始碼不放入公開 repository；已編譯的 bundle/data 直接隨應用程式打包。
+      - name: Build Tauri application
+        working-directory: src-tauri
+        run: cargo tauri build ${{ matrix.args }}
+
+      - name: Rename Windows artifacts
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = "$env:RELEASE_TAG"
+          $nsisDir = "src-tauri/target/release/bundle/nsis"
+          $msiDir = "src-tauri/target/release/bundle/msi"
+
+          $nsis = Get-ChildItem $nsisDir -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($nsis) {
+            Move-Item $nsis.FullName (Join-Path $nsisDir "ReversedFront_$version.exe") -Force
+          }
+
+          $msi = Get-ChildItem $msiDir -Filter *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($msi) {
+            Move-Item $msi.FullName (Join-Path $msiDir "ReversedFront_$version.msi") -Force
+          }
+
+      - name: Rename Linux artifacts
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          set -e
+          deb_file=$(find src-tauri/target -path '*/bundle/deb/*.deb' | head -n 1 || true)
+          if [ -n "$deb_file" ]; then
+            mv "$deb_file" "$(dirname "$deb_file")/ReversedFront_${RELEASE_TAG}.deb"
+          fi
+
+          appimage_file=$(find src-tauri/target -path '*/bundle/appimage/*.AppImage' | head -n 1 || true)
+          if [ -n "$appimage_file" ]; then
+            mv "$appimage_file" "$(dirname "$appimage_file")/ReversedFront_${RELEASE_TAG}.AppImage"
+          fi
+
+      - name: Rename macOS artifacts
+        if: matrix.platform == 'macos-latest'
+        run: |
+          set -e
+          dmg_file=$(find src-tauri/target -path '*/bundle/dmg/*.dmg' | head -n 1 || true)
+          if [ -n "$dmg_file" ]; then
+            mv "$dmg_file" "$(dirname "$dmg_file")/ReversedFront_${RELEASE_TAG}.dmg"
+          fi
+
+          app_file=$(find src-tauri/target -path '*/bundle/macos/*.app.tar.gz' | head -n 1 || true)
+          if [ -n "$app_file" ]; then
+            mv "$app_file" "$(dirname "$app_file")/ReversedFront_${RELEASE_TAG}.app.tar.gz"
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/**/bundle/deb/*.deb
+            src-tauri/target/**/bundle/appimage/*.AppImage
+            src-tauri/target/**/bundle/msi/*.msi
+            src-tauri/target/**/bundle/nsis/*.exe
+            src-tauri/target/**/bundle/dmg/*.dmg
+            src-tauri/target/**/bundle/macos/*.app.tar.gz

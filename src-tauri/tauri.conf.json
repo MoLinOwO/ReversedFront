@@ -1,0 +1,64 @@
+{
+  "productName": "ReversedFront Desktop",
+  "version": "3.1.0",
+  "identifier": "com.reversedfront.desktop",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "../web"
+  },
+  "bundle": {
+    "active": true,
+    "category": "DeveloperTool",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/index.html": "./",
+      "resources/manifest.json": "./",
+      "resources/transporter.html": "./",
+      "resources/static": "./static",
+      "resources/tiles": "./tiles",
+      "resources/dexopt": "./dexopt",
+      "resources/mod": "./mod"
+    },
+    "windows": {
+      "wix": null,
+      "nsis": null
+    },
+    "linux": {
+      "deb": {
+        "files": {}
+      },
+      "appimage": {
+        "files": {}
+      }
+    },
+    "macOS": {
+      "files": {}
+    },
+    "targets": "all"
+  },
+  "app": {
+    "windows": [
+      {
+      "title": "逆統戰：烽火",
+        "url": "http://127.0.0.1:8765",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    }
+  }
+}

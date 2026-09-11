@@ -1,0 +1,125 @@
+// Desktop compatibility layer for the current mobile-first RF bundle.
+// The official web bundle expects a small native object to exist when it is
+// running inside the Android WebView. Tauri supplies the real desktop APIs;
+// this file only supplies the missing mobile-shaped values and callbacks.
+(function () {
+  'use strict';
+
+  var localeKey = 'rf.desktop.locale';
+  var storedLocale = null;
+  try {
+    storedLocale = window.localStorage.getItem(localeKey);
+  } catch (_) {}
+
+  if (!window.deviceInfo) {
+    window.deviceInfo = {
+      app_version: '3.1.0',
+      deviceType: 'desktop',
+      platform: 'windows',
+      uniqueId: 'rf-desktop',
+      locale: storedLocale || 'zh-Hant',
+      // The desktop shell uses the normal local/remote resource path and has
+      // no mobile foreground-download prompt.
+      promptedExtraDownload: 'background',
+      assetsDL_path: ''
+    };
+  }
+
+  // The current RF bundle uses this object for mobile-only notifications.
+  // Supplying an empty download queue prevents a mobile extra-resource modal
+  // from blocking the desktop login screen.
+  if (!window.dlInfo) {
+    window.dlInfo = { q_files: 0, total_size: 0 };
+  }
+
+  function emitAppMessage(action, data) {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({ action: action, data: data })
+    }));
+  }
+
+  function invokeTauri(command, args) {
+    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+      return window.__TAURI__.core.invoke(command, args || {});
+    }
+    return Promise.resolve(null);
+  }
+
+  function preloadImages(images) {
+    var list = Array.isArray(images) ? images : [];
+    if (!list.length) {
+      emitAppMessage('PRELOAD:progress', { ratio: 1 });
+      return;
+    }
+
+    var completed = 0;
+    var update = function () {
+      completed += 1;
+      emitAppMessage('PRELOAD:progress', {
+        ratio: Math.min(1, completed / list.length)
+      });
+    };
+
+    list.forEach(function (path) {
+      var image = new Image();
+      image.onload = update;
+      image.onerror = update;
+      image.src = './passionfruit' + path;
+    });
+  }
+
+  if (!window.ReactNativeWebView) {
+    window.ReactNativeWebView = {
+      postMessage: function (payload) {
+        var message;
+        try {
+          message = typeof payload === 'string' ? JSON.parse(payload) : payload;
+        } catch (_) {
+          return;
+        }
+
+        if (!message || !message.action) return;
+
+        switch (message.action) {
+          case 'SETTING:locale':
+            if (message.data && message.data.locale) {
+              window.deviceInfo.locale = message.data.locale;
+              try {
+                window.localStorage.setItem(localeKey, message.data.locale);
+              } catch (_) {}
+            }
+            break;
+          case 'SETTING:promptedExtraDownload':
+            if (message.data) {
+              window.deviceInfo.promptedExtraDownload = message.data.promptedExtraDownload;
+            }
+            break;
+          case 'PRELOAD:images':
+            preloadImages(message.data && message.data.preloadImages);
+            break;
+          case 'APP:exit':
+            invokeTauri('exit_app');
+            break;
+          case 'APP:openUrl':
+            if (message.data && message.data.url) {
+              window.open(message.data.url, '_blank', 'noopener,noreferrer');
+            }
+            break;
+          case 'APP:fixWebviewHeight':
+          case 'DOWNLOAD:dlInfo_show':
+          case 'WSS:playerChannelJoined':
+          case 'IAP:getProducts':
+          case 'IAP:buyProduct':
+          case 'LOGIN:google':
+          case 'LOGIN:apple':
+          case 'LOGIN:facebook':
+            // These are mobile-only callbacks. Desktop login remains the
+            // normal RF form login and does not need a native response here.
+            break;
+          default:
+            break;
+        }
+      }
+    };
+  }
+})();

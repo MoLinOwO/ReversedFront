@@ -1,0 +1,34 @@
+{
+  "name": "rf-desktop",
+  "version": "3.1.0",
+  "description": "Reversed Front desktop application shell for the latest RF web build",
+  "main": "index.js",
+  "scripts": {
+    "tauri": "tauri",
+    "build": "tauri build",
+    "dev": "tauri dev",
+    "mod:build": "webpack --config web/mod/webpack.config.cjs --mode production",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MoLinOwO/ReversedFront_Public.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/MoLinOwO/ReversedFront_Public/issues"
+  },
+  "homepage": "https://github.com/MoLinOwO/ReversedFront_Public#readme",
+  "devDependencies": {
+    "@babel/core": "^7.28.5",
+    "@babel/preset-env": "^7.28.5",
+    "@tauri-apps/cli": "^2.9.6",
+    "babel-loader": "^10.0.0",
+    "terser-webpack-plugin": "^5.3.16",
+    "webpack": "^5.104.1",
+    "webpack-cli": "^6.0.1"
+  }
+}

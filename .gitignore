@@ -1,0 +1,72 @@
+# Node.js
+web/mod/node_modules/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Mod 原始碼保留在本機；公開 repository 只提交編譯後的 bundle/data
+web/mod/js/account/
+web/mod/js/audio/
+web/mod/js/core/
+web/mod/js/map/
+web/mod/js/ui/
+web/mod/js/index.js
+web/mod/js/tauri_bridge.js
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系統文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# 編譯產物
+Buildexe/
+main.build/
+main.dist/
+*.exe
+*.app
+*.dmg
+*.tar.gz
+*.zip
+
+# 環境變數
+.env
+.env.local
+
+# 證書文件（絕不提交）
+*.pfx
+*.p12
+*.pem
+*.key
+web/mod/data/*.pfx
+web/mod/data/config.json
+
+# 資源文件
+web/passionfruit/
+
+# 日誌
+*.log
+logs/
+
+# 臨時文件
+*.tmp
+*.bak
+*.swp
+*.cache
+
+web/mod/data/config.json
+
+src-tauri/target/
+src-tauri/resources/

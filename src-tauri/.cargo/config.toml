@@ -1,0 +1,21 @@
+# 編譯速度優化配置
+
+[build]
+# 增加並行編譯任務數
+jobs = 8
+
+[target.x86_64-pc-windows-msvc]
+# Windows: 使用更快的 lld-link
+linker = "rust-lld"
+
+[target.x86_64-unknown-linux-gnu]
+# Linux: 優先使用 mold，fallback 到 lld
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.x86_64-apple-darwin]
+# macOS Intel: 使用 zld (需安裝: brew install zld)
+# rustflags = ["-C", "link-arg=-fuse-ld=zld"]
+
+[target.aarch64-apple-darwin]
+# macOS ARM: 使用 zld
+# rustflags = ["-C", "link-arg=-fuse-ld=zld"]

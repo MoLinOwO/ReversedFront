@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style type="text/css">
+      body {
+        background-color: black;
+      }
+    </style>
+
+    <script>
+      //console.log(window.location);
+      const url = new URL(window.location.href);
+
+      let go_url = url.searchParams.get('go_url');
+
+      if (go_url) {
+        go_url = `./index.html#${go_url}`;
+        console.log('[transporter] go_url', go_url);
+        window.location.replace(go_url);
+      }
+    </script>
+  </head>
+  <body></body>
+</html>

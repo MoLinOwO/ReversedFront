@@ -1,0 +1,10 @@
+# 退出遊戲提示語，可自行擴充
+- message: "珍惜生命，遠離逆統戰"
+  confirm: "確定"
+  cancel: "取消"
+- message: "確定要治癒精神疾病嗎?"
+  confirm: "確定"
+  cancel: "我沒病"
+- message: "你無法離開此遊戲，這可不是在鬧著玩的"
+  confirm: "我不信離不開"
+  cancel: "我信了"

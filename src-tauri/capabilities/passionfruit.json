@@ -1,0 +1,8 @@
+{
+  "identifier": "passionfruit-capability",
+  "description": "Capability to allow access to passionfruit protocol",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

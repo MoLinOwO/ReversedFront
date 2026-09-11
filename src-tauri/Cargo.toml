@@ -1,0 +1,33 @@
+[package]
+name = "rf-desktop"
+version = "3.1.0"
+description = "Reversed Front Desktop App"
+authors = ["you"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+tauri = { version = "2.5", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json", "stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+anyhow = "1.0"
+regex = "1.10"
+urlencoding = "2.1"
+warp = "0.3"
+num_cpus = "1.0"
+directories = "6.0.0"
+
+# 編譯速度優化
+[profile.dev]
+incremental = true
+codegen-units = 256
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "z"
+strip = true
