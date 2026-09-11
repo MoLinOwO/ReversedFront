@@ -46,9 +46,30 @@ pub fn save_yaml(filename: String, content: String) -> bool {
 }
 
 #[tauri::command]
-pub fn load_yaml(filename: String) -> Option<String> {
-    let path = config_manager::get_hidden_config_dir("data").join(filename);
-    fs::read_to_string(path).ok()
+pub fn load_yaml(app: AppHandle, filename: String) -> Option<String> {
+    // 只允許載入資料檔名，避免這個通用命令被用來讀取任意路徑。
+    let requested = std::path::Path::new(&filename);
+    if requested.is_absolute()
+        || requested
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+
+    // 使用者資料優先，讓使用者可以自訂退出提示詞；沒有自訂檔時再讀取
+    // 安裝包內的 mod/data 預設檔。這修正 Release 版只會拿到 fallback 的問題。
+    let user_path = config_manager::get_hidden_config_dir("data").join(&filename);
+    if let Ok(content) = fs::read_to_string(user_path) {
+        return Some(content);
+    }
+
+    let resource_path = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|root| root.join("mod").join("data").join(&filename))?;
+    fs::read_to_string(resource_path).ok()
 }
 
 #[tauri::command]

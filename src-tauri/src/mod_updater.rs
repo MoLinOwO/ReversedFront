@@ -75,7 +75,7 @@ fn is_sha(value: &str) -> bool {
 }
 
 fn allowed_path(path: &str) -> bool {
-    if path.ends_with(".pfx") || path.ends_with("config.json") {
+    if path.ends_with(".pfx") || path.ends_with("config.json") || path.ends_with("RFcity.yaml") {
         return false;
     }
 
@@ -162,13 +162,6 @@ async fn download_and_install_inner(app: &AppHandle, remote_ref: &str) -> Result
     {
         bail!("更新內容缺少 main.bundle.js");
     }
-    if !files
-        .iter()
-        .any(|entry| entry.path == "web/mod/data/RFcity.yaml")
-    {
-        bail!("更新內容缺少 RFcity.yaml");
-    }
-
     for entry in &files {
         if let Some(size) = entry.size {
             if size > MAX_FILE_SIZE {

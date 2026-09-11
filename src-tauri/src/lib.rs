@@ -26,21 +26,28 @@ async fn handle_static_file(
 
     // 處理根路徑
     let relative_path = path_str.trim_start_matches('/');
-    let file_path = if relative_path.is_empty() {
-        resource_base.join("index.html")
+    if relative_path.split('/').any(|part| part == "..") || relative_path.contains('\\') {
+        return Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Vec::new())
+            .unwrap());
+    }
+
+    let (file_path, allowed_root) = if relative_path.is_empty() {
+        (resource_base.join("index.html"), resource_base.clone())
     } else if let Some(mod_relative) = relative_path.strip_prefix("mod/") {
         let update_path = mod_update_root.join(mod_relative);
         if update_path.exists() {
-            update_path
+            (update_path, mod_update_root.clone())
         } else {
-            resource_base.join(relative_path)
+            (resource_base.join(relative_path), resource_base.clone())
         }
     } else {
-        resource_base.join(relative_path)
+        (resource_base.join(relative_path), resource_base.clone())
     };
 
     // 安全檢查：防止路徑遍歷
-    if !file_path.starts_with(&resource_base) {
+    if !file_path.starts_with(&allowed_root) {
         return Ok(Response::builder()
             .status(StatusCode::FORBIDDEN)
             .body(Vec::new())
