@@ -36,7 +36,6 @@
 
   if (!window.deviceInfo) {
     window.deviceInfo = {
-      app_version: '3.1.0',
       deviceType: 'desktop',
       platform: 'windows',
       uniqueId: 'rf-desktop',
