@@ -58,6 +58,7 @@ web/mod/data/accounts.json
 
 # 資源文件
 web/passionfruit/
+passionfruit/
 
 # 日誌
 *.log

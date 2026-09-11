@@ -20,6 +20,7 @@ urlencoding = "2.1"
 warp = "0.3"
 num_cpus = "1.0"
 directories = "6.0.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # 編譯速度優化
 [profile.dev]

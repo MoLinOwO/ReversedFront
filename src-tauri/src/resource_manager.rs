@@ -34,7 +34,10 @@ pub struct ResourceManager {
 
 impl ResourceManager {
     pub fn new() -> Arc<Self> {
-        let base_dir = get_hidden_config_dir("root");
+        // Keep downloaded game resources in the same writable per-user data
+        // directory used by the rest of the desktop app. Never write the
+        // cache beside the executable or in the project checkout.
+        let base_dir = crate::config_manager::get_hidden_config_dir("root");
         // Ensure passionfruit directory exists
         let passionfruit_dir = base_dir.join("passionfruit");
         fs::create_dir_all(&passionfruit_dir).unwrap_or_default();
@@ -302,24 +305,5 @@ impl<'a> Drop for InflightGuard<'a> {
 }
 
 pub fn get_hidden_config_dir(target: &str) -> PathBuf {
-    let mut path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    // If we are in src-tauri (dev mode), go up one level
-    if path.ends_with("src-tauri") {
-        path.pop();
-    }
-
-    #[cfg(debug_assertions)]
-    path.push("assets");
-
-    if target == "passionfruit" {
-        path.push("passionfruit");
-    } else if target == "root" {
-        // Do nothing, use base path
-    } else {
-        path.push("mod");
-        path.push("data");
-    }
-
-    path
+    crate::config_manager::get_hidden_config_dir(target)
 }

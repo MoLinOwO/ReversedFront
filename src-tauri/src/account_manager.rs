@@ -1,14 +1,45 @@
 use crate::config_manager;
-use serde::{Deserialize, Serialize};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::Value;
 use std::fs;
+use std::path::PathBuf;
+use std::time::Duration;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-struct AccountStore {
-    #[serde(default)]
-    accounts: Vec<Value>,
-    #[serde(default)]
-    active_account: Option<String>,
+const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL DEFAULT '',
+    profile_json TEXT NOT NULL DEFAULT '{}',
+    settings_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+"#;
+
+fn database_path() -> PathBuf {
+    config_manager::get_account_store_file()
+}
+
+fn open_database() -> rusqlite::Result<Connection> {
+    let path = database_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    }
+
+    let mut connection = Connection::open(path)?;
+    // SQLite 的 busy timeout、WAL 與交易是跨進程同步的核心；不再需要
+    // accounts.json 那種「讀取後整份寫回」的競爭鎖。
+    connection.busy_timeout(Duration::from_secs(10))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "NORMAL")?;
+    connection.execute_batch(SCHEMA)?;
+    migrate_legacy_data(&mut connection)?;
+    Ok(connection)
 }
 
 fn account_name(value: &Value) -> Option<&str> {
@@ -32,31 +63,204 @@ fn target_account_name(target: Option<&Value>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn save_store(store: &AccountStore) -> bool {
-    let path = config_manager::get_account_store_file();
-    let Some(parent) = path.parent() else {
-        return false;
-    };
+fn account_parts(data: &Value) -> Option<(String, String, String, String)> {
+    let name = account_name(data)?.to_owned();
+    let password = data
+        .get("password")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
 
-    if fs::create_dir_all(parent).is_err() {
-        return false;
-    }
+    let mut profile = data.as_object().cloned().unwrap_or_default();
+    profile.remove("account");
+    profile.remove("password");
+    profile.remove("settings");
 
-    match serde_json::to_string_pretty(store) {
-        Ok(content) => fs::write(path, content).is_ok(),
-        Err(_) => false,
-    }
+    let settings = data
+        .get("settings")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    Some((
+        name,
+        password,
+        serde_json::to_string(&profile).ok()?,
+        serde_json::to_string(&settings).ok()?,
+    ))
 }
 
-fn migrate_legacy_config() -> Option<AccountStore> {
-    let mut config = config_manager::load_config();
-    let accounts = config.get("accounts")?.as_array()?.clone();
-    let active_index = config
+fn value_from_row(
+    account: String,
+    password: String,
+    profile_json: String,
+    settings_json: String,
+) -> Value {
+    let mut profile = serde_json::from_str::<Value>(&profile_json)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let settings = serde_json::from_str::<Value>(&settings_json)
+        .ok()
+        .filter(|value| value.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    profile.insert("account".to_string(), Value::String(account));
+    profile.insert("password".to_string(), Value::String(password));
+    profile.insert("settings".to_string(), settings);
+    Value::Object(profile)
+}
+
+fn query_accounts(tx: &Transaction<'_>) -> rusqlite::Result<Vec<Value>> {
+    let mut statement = tx.prepare(
+        "SELECT account, password, profile_json, settings_json
+         FROM accounts ORDER BY id ASC",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(value_from_row(
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+        ))
+    })?;
+
+    rows.collect()
+}
+
+fn get_state(tx: &Transaction<'_>, key: &str) -> rusqlite::Result<Option<String>> {
+    tx.query_row(
+        "SELECT value FROM app_state WHERE key = ?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn set_state(tx: &Transaction<'_>, key: &str, value: Option<&str>) -> rusqlite::Result<()> {
+    match value {
+        Some(value) => tx.execute(
+            "INSERT INTO app_state(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?,
+        None => tx.execute("DELETE FROM app_state WHERE key = ?1", params![key])?,
+    };
+    Ok(())
+}
+
+fn first_account_name(tx: &Transaction<'_>) -> rusqlite::Result<Option<String>> {
+    tx.query_row(
+        "SELECT account FROM accounts ORDER BY id ASC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn account_name_at(tx: &Transaction<'_>, index: usize) -> rusqlite::Result<Option<String>> {
+    tx.query_row(
+        "SELECT account FROM accounts ORDER BY id ASC LIMIT 1 OFFSET ?1",
+        params![index as i64],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn normalize_active_account(tx: &Transaction<'_>) -> rusqlite::Result<Option<String>> {
+    let active = get_state(tx, "active_account")?;
+    if let Some(active_name) = active {
+        let exists: Option<String> = tx
+            .query_row(
+                "SELECT account FROM accounts WHERE account = ?1",
+                params![active_name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_some() {
+            return Ok(exists);
+        }
+    }
+
+    let first = first_account_name(tx)?;
+    set_state(tx, "active_account", first.as_deref())?;
+    Ok(first)
+}
+
+fn upsert_account(tx: &Transaction<'_>, data: &Value) -> rusqlite::Result<bool> {
+    let Some((name, password, profile_json, settings_json)) = account_parts(data) else {
+        return Ok(false);
+    };
+
+    let existing: Option<String> = tx
+        .query_row(
+            "SELECT account FROM accounts WHERE account = ?1",
+            params![name],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    if existing.is_some() {
+        // 登入攔截器可能再次送出同一帳號；更新密碼及其他欄位，
+        // 但保留這個帳號原本的模組設定。
+        tx.execute(
+            "UPDATE accounts SET password = ?1, profile_json = ?2 WHERE account = ?3",
+            params![password, profile_json, name],
+        )?;
+    } else {
+        tx.execute(
+            "INSERT INTO accounts(account, password, profile_json, settings_json)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![name, password, profile_json, settings_json],
+        )?;
+    }
+    Ok(true)
+}
+
+fn insert_legacy_account(tx: &Transaction<'_>, data: &Value) -> rusqlite::Result<bool> {
+    let Some((name, password, profile_json, settings_json)) = account_parts(data) else {
+        return Ok(false);
+    };
+    let inserted = tx.execute(
+        "INSERT OR IGNORE INTO accounts(account, password, profile_json, settings_json)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![name, password, profile_json, settings_json],
+    )?;
+    Ok(inserted > 0)
+}
+
+fn legacy_json_source() -> (Vec<Value>, Option<String>, bool) {
+    let path = config_manager::get_legacy_account_store_file();
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(value) = serde_json::from_str::<Value>(&content) {
+            let accounts = value
+                .get("accounts")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let active = value
+                .get("active_account")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            if !accounts.is_empty() {
+                return (accounts, active, true);
+            }
+        }
+    }
+    (Vec::new(), None, false)
+}
+
+fn legacy_config_source() -> (Vec<Value>, Option<String>) {
+    let config = config_manager::load_config();
+    let accounts = config
+        .get("accounts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let active = config
         .get("active_account_index")
         .and_then(Value::as_u64)
-        .map(|value| value as usize);
-    let active_account = active_index
-        .and_then(|index| accounts.get(index))
+        .and_then(|index| accounts.get(index as usize))
         .and_then(account_name)
         .map(ToOwned::to_owned)
         .or_else(|| {
@@ -65,24 +269,7 @@ fn migrate_legacy_config() -> Option<AccountStore> {
                 .and_then(account_name)
                 .map(ToOwned::to_owned)
         });
-
-    let store = AccountStore {
-        accounts,
-        active_account,
-    };
-
-    if !save_store(&store) {
-        return Some(store);
-    }
-
-    // 舊版本的帳號密碼已搬到 accounts.json，從 config.json 移除敏感資料。
-    if let Some(object) = config.as_object_mut() {
-        object.remove("accounts");
-        object.remove("active_account_index");
-        config_manager::save_config(&config);
-    }
-
-    Some(store)
+    (accounts, active)
 }
 
 fn purge_legacy_config_accounts() {
@@ -96,199 +283,239 @@ fn purge_legacy_config_accounts() {
     }
 }
 
-fn load_store() -> AccountStore {
-    let path = config_manager::get_account_store_file();
-    if let Ok(content) = fs::read_to_string(path) {
-        if let Ok(store) = serde_json::from_str::<AccountStore>(&content) {
-            purge_legacy_config_accounts();
-            return store;
+fn migrate_legacy_data(connection: &mut Connection) -> rusqlite::Result<()> {
+    let account_count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))?;
+    let legacy_path = config_manager::get_legacy_account_store_file();
+
+    let (accounts, active_name, imported_json) = if account_count == 0 {
+        let (json_accounts, json_active, imported_json) = legacy_json_source();
+        if imported_json {
+            (json_accounts, json_active, true)
+        } else {
+            let (config_accounts, config_active) = legacy_config_source();
+            (config_accounts, config_active, false)
         }
+    } else {
+        (Vec::new(), None, false)
+    };
+
+    if account_count == 0 && !accounts.is_empty() {
+        let tx = connection.transaction()?;
+        let mut first_imported_name = None;
+        for account in &accounts {
+            if insert_legacy_account(&tx, account)? && first_imported_name.is_none() {
+                first_imported_name = account_name(account).map(ToOwned::to_owned);
+            }
+        }
+        let selected = active_name
+            .filter(|name| {
+                tx.query_row(
+                    "SELECT 1 FROM accounts WHERE account = ?1",
+                    params![name],
+                    |_| Ok(()),
+                )
+                .is_ok()
+            })
+            .or(first_imported_name)
+            .or_else(|| first_account_name(&tx).ok().flatten());
+        set_state(&tx, "active_account", selected.as_deref())?;
+        tx.commit()?;
+
+        // DB 已完成交易提交後才清掉舊的明文 JSON，避免遷移中斷造成帳號遺失。
+        if imported_json {
+            let _ = fs::remove_file(legacy_path);
+        }
+        purge_legacy_config_accounts();
+    } else if account_count > 0 {
+        // 舊檔案若因升級流程留下，DB 已是完整來源，直接移除避免之後誤用。
+        let _ = fs::remove_file(legacy_path);
+        purge_legacy_config_accounts();
     }
 
-    migrate_legacy_config().unwrap_or_default()
+    Ok(())
 }
 
-fn normalize_active_account(store: &mut AccountStore) -> bool {
-    let previous = store.active_account.clone();
-    let is_valid = store.active_account.as_deref().is_some_and(|name| {
-        store
-            .accounts
-            .iter()
-            .any(|account| account_name(account) == Some(name))
-    });
-
-    if !is_valid {
-        store.active_account = store
-            .accounts
-            .iter()
-            .find_map(account_name)
-            .map(ToOwned::to_owned);
-    }
-
-    previous != store.active_account
+fn with_transaction<T, F>(operation: F) -> Option<T>
+where
+    F: FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
+{
+    let mut connection = open_database().ok()?;
+    let transaction = connection.transaction().ok()?;
+    let result = operation(&transaction).ok()?;
+    transaction.commit().ok()?;
+    Some(result)
 }
 
 pub fn get_accounts() -> Vec<Value> {
-    let mut store = load_store();
-    if normalize_active_account(&mut store) {
-        let _ = save_store(&store);
-    }
-    store.accounts
+    with_transaction(|tx| {
+        normalize_active_account(tx)?;
+        query_accounts(tx)
+    })
+    .unwrap_or_default()
 }
 
-pub fn add_account(mut data: Value) -> bool {
-    let Some(name) = account_name(&data).map(ToOwned::to_owned) else {
-        return false;
-    };
-
-    let mut store = load_store();
-    if let Some(existing) = store
-        .accounts
-        .iter_mut()
-        .find(|account| account_name(account) == Some(name.as_str()))
-    {
-        // 登入攔截器可能再次送出同一帳號；更新密碼但保留該帳號的模組設定。
-        if let (Some(existing_object), Some(new_object)) =
-            (existing.as_object_mut(), data.as_object_mut())
-        {
-            for (key, value) in new_object.iter() {
-                if key != "settings" && !value.is_null() {
-                    existing_object.insert(key.clone(), value.clone());
-                }
-            }
+pub fn add_account(data: Value) -> bool {
+    with_transaction(|tx| {
+        let Some(name) = account_name(&data).map(ToOwned::to_owned) else {
+            return Ok(false);
+        };
+        let added = upsert_account(tx, &data)?;
+        if get_state(tx, "active_account")?.is_none() {
+            set_state(tx, "active_account", Some(&name))?;
         }
-    } else {
-        if !data.get("settings").is_some_and(Value::is_object) {
-            data["settings"] = serde_json::json!({});
-        }
-        store.accounts.push(data);
-    }
-
-    if store.active_account.is_none() {
-        store.active_account = Some(name);
-    }
-
-    save_store(&store)
+        Ok(added)
+    })
+    .unwrap_or(false)
 }
 
 pub fn delete_account(index: usize) -> bool {
-    let mut store = load_store();
-    if index >= store.accounts.len() {
-        return false;
-    }
+    with_transaction(|tx| {
+        let Some(deleted_name) = account_name_at(tx, index)? else {
+            return Ok(false);
+        };
+        tx.execute(
+            "DELETE FROM accounts WHERE account = ?1",
+            params![deleted_name],
+        )?;
 
-    let deleted_name = account_name(&store.accounts[index]).map(ToOwned::to_owned);
-    store.accounts.remove(index);
-    if store.active_account == deleted_name {
-        store.active_account = store
-            .accounts
-            .get(index.min(store.accounts.len().saturating_sub(1)))
-            .and_then(account_name)
-            .map(ToOwned::to_owned);
-    }
-    normalize_active_account(&mut store);
-    save_store(&store)
+        if get_state(tx, "active_account")?.as_deref() == Some(deleted_name.as_str()) {
+            let next_index = index.saturating_sub(1);
+            let next_name =
+                account_name_at(tx, next_index)?.or_else(|| first_account_name(tx).ok().flatten());
+            set_state(tx, "active_account", next_name.as_deref())?;
+        } else {
+            normalize_active_account(tx)?;
+        }
+        Ok(true)
+    })
+    .unwrap_or(false)
 }
 
 pub fn set_active_account(index: usize) -> bool {
-    let mut store = load_store();
-    let Some(name) = store.accounts.get(index).and_then(account_name) else {
-        return false;
-    };
-
-    store.active_account = Some(name.to_owned());
-    save_store(&store)
+    with_transaction(|tx| {
+        let Some(name) = account_name_at(tx, index)? else {
+            return Ok(false);
+        };
+        set_state(tx, "active_account", Some(&name))?;
+        Ok(true)
+    })
+    .unwrap_or(false)
 }
 
 pub fn get_active_account() -> Option<Value> {
-    let mut store = load_store();
-    if normalize_active_account(&mut store) {
-        let _ = save_store(&store);
-    }
-
-    let name = store.active_account.clone()?;
-    store
-        .accounts
-        .into_iter()
-        .find(|account| account_name(account) == Some(name.as_str()))
+    with_transaction(|tx| {
+        let name = normalize_active_account(tx)?;
+        let Some(name) = name else {
+            return Ok(None);
+        };
+        tx.query_row(
+            "SELECT account, password, profile_json, settings_json
+             FROM accounts WHERE account = ?1",
+            params![name],
+            |row| {
+                Ok(value_from_row(
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                ))
+            },
+        )
+        .optional()
+    })
+    .flatten()
 }
 
-pub fn get_account_settings(target_account: Option<Value>) -> Value {
-    let store = load_store();
-    let target_name = target_account_name(target_account.as_ref())
-        .or_else(|| store.active_account.clone())
-        .or_else(|| {
-            store
-                .accounts
-                .first()
-                .and_then(account_name)
-                .map(ToOwned::to_owned)
-        });
-
-    let settings = target_name
-        .as_deref()
-        .and_then(|name| {
-            store
-                .accounts
-                .iter()
-                .find(|account| account_name(account) == Some(name))
-        })
-        .and_then(|account| account.get("settings"))
-        .filter(|value| value.is_object());
-
+fn default_settings() -> Value {
     serde_json::json!({
-        "bgm": settings.and_then(|value| value.get("bgm_volume")).and_then(Value::as_f64).unwrap_or(1.0),
-        "se": settings.and_then(|value| value.get("se_volume")).and_then(Value::as_f64).unwrap_or(1.0),
-        "se147Muted": settings.and_then(|value| value.get("se147_muted")).and_then(Value::as_bool).unwrap_or(false),
-        "report_faction_filter": settings
-            .and_then(|value| value.get("report_faction_filter"))
-            .and_then(Value::as_str)
-            .unwrap_or("全部")
+        "bgm": 1.0,
+        "se": 1.0,
+        "se147Muted": false,
+        "report_faction_filter": "全部"
     })
 }
 
+fn settings_for_account(tx: &Transaction<'_>, name: &str) -> rusqlite::Result<Option<Value>> {
+    tx.query_row(
+        "SELECT settings_json FROM accounts WHERE account = ?1",
+        params![name],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|value| {
+        value.map(|json| {
+            serde_json::from_str::<Value>(&json)
+                .ok()
+                .filter(|value| value.is_object())
+                .unwrap_or_else(|| serde_json::json!({}))
+        })
+    })
+}
+
+pub fn get_account_settings(target_account: Option<Value>) -> Value {
+    with_transaction(|tx| {
+        let target_name = target_account_name(target_account.as_ref())
+            .or(normalize_active_account(tx)?)
+            .or(first_account_name(tx)?);
+        let Some(target_name) = target_name else {
+            return Ok(default_settings());
+        };
+        let Some(settings) = settings_for_account(tx, &target_name)? else {
+            return Ok(default_settings());
+        };
+
+        Ok(serde_json::json!({
+            "bgm": settings.get("bgm_volume").and_then(Value::as_f64).unwrap_or(1.0),
+            "se": settings.get("se_volume").and_then(Value::as_f64).unwrap_or(1.0),
+            "se147Muted": settings.get("se147_muted").and_then(Value::as_bool).unwrap_or(false),
+            "report_faction_filter": settings
+                .get("report_faction_filter")
+                .and_then(Value::as_str)
+                .unwrap_or("全部")
+        }))
+    })
+    .unwrap_or_else(default_settings)
+}
+
 pub fn update_account_settings(fields: Value) -> bool {
-    let mut store = load_store();
-    let target_name = target_account_name(fields.get("target_account"))
-        .or_else(|| store.active_account.clone())
-        .or_else(|| {
-            store
-                .accounts
-                .first()
-                .and_then(account_name)
-                .map(ToOwned::to_owned)
-        });
-    let Some(target_name) = target_name else {
-        return false;
-    };
+    with_transaction(|tx| {
+        let target_name = target_account_name(fields.get("target_account"))
+            .or(normalize_active_account(tx)?)
+            .or(first_account_name(tx)?);
+        let Some(target_name) = target_name else {
+            return Ok(false);
+        };
+        let Some(mut settings) = settings_for_account(tx, &target_name)? else {
+            return Ok(false);
+        };
+        let Some(settings_object) = settings.as_object_mut() else {
+            return Ok(false);
+        };
 
-    let Some(account) = store
-        .accounts
-        .iter_mut()
-        .find(|account| account_name(account) == Some(target_name.as_str()))
-    else {
-        return false;
-    };
-
-    if !account.get("settings").is_some_and(Value::is_object) {
-        account["settings"] = serde_json::json!({});
-    }
-    let Some(settings) = account.get_mut("settings").and_then(Value::as_object_mut) else {
-        return false;
-    };
-
-    let mut changed = false;
-    for (source, destination) in [
-        ("bgm", "bgm_volume"),
-        ("se", "se_volume"),
-        ("se147Muted", "se147_muted"),
-        ("report_faction_filter", "report_faction_filter"),
-    ] {
-        if let Some(value) = fields.get(source).filter(|value| !value.is_null()) {
-            settings.insert(destination.to_string(), value.clone());
-            changed = true;
+        let mut changed = false;
+        for (source, destination) in [
+            ("bgm", "bgm_volume"),
+            ("se", "se_volume"),
+            ("se147Muted", "se147_muted"),
+            ("report_faction_filter", "report_faction_filter"),
+        ] {
+            if let Some(value) = fields.get(source).filter(|value| !value.is_null()) {
+                settings_object.insert(destination.to_string(), value.clone());
+                changed = true;
+            }
         }
-    }
 
-    changed && save_store(&store)
+        if changed {
+            tx.execute(
+                "UPDATE accounts SET settings_json = ?1 WHERE account = ?2",
+                params![
+                    serde_json::to_string(&settings).unwrap_or_else(|_| "{}".to_string()),
+                    target_name
+                ],
+            )?;
+        }
+        Ok(changed)
+    })
+    .unwrap_or(false)
 }

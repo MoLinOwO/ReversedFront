@@ -1,7 +1,7 @@
 {
   "identifier": "passionfruit-capability",
   "description": "Capability to allow access to passionfruit protocol",
-  "windows": ["main"],
+  "windows": ["main", "rf-account-*"],
   "permissions": [
     "core:default"
   ]

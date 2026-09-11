@@ -14,6 +14,7 @@ use warp::{http::Response, http::StatusCode, Filter};
 
 pub struct AppState {
     pub resource_manager: Arc<ResourceManager>,
+    pub server_base_url: String,
 }
 
 // 提供靜態前端檔案
@@ -79,6 +80,23 @@ async fn handle_static_file(
                 .header("Cache-Control", "no-cache")
                 .body(data)
                 .unwrap())
+        }
+        // React Router uses browser history for pages such as
+        // /users/log_in. Return the SPA entry for extension-less routes so
+        // navigating from the splash screen does not become a false 404.
+        Err(_) if file_path.extension().is_none() => {
+            match fs::read(resource_base.join("index.html")) {
+                Ok(data) => Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .header("Cache-Control", "no-cache")
+                    .body(data)
+                    .unwrap()),
+                Err(_) => Ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Vec::new())
+                    .unwrap()),
+            }
         }
         Err(_) => Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -189,7 +207,7 @@ pub fn run() {
             }
 
             // Dynamically allow access to the passionfruit directory
-            let resource_dir = resource_manager::get_hidden_config_dir("passionfruit");
+            let resource_dir = config_manager::get_hidden_config_dir("passionfruit");
             if !resource_dir.exists() {
                 let _ = fs::create_dir_all(&resource_dir);
             }
@@ -197,6 +215,7 @@ pub fn run() {
             let resource_manager = ResourceManager::new();
             app.manage(AppState {
                 resource_manager: resource_manager.clone(),
+                server_base_url: "http://127.0.0.1:8765".to_string(),
             });
 
             // === 步驟 3: 啟動 HTTP 伺服器 ===
@@ -212,7 +231,6 @@ pub fn run() {
                     .allow_any_origin()
                     .allow_methods(vec!["GET", "POST", "OPTIONS"]);
 
-                // 狀態查詢路由
                 let status_route = warp::path("status")
                     .and(resource_manager_filter_status)
                     .map(|rm: Arc<ResourceManager>| {
@@ -220,20 +238,17 @@ pub fn run() {
                         warp::reply::json(&status)
                     });
 
-                // passionfruit 資源路由
                 let passionfruit_route = warp::path("passionfruit")
                     .and(warp::path::tail())
                     .and(resource_manager_filter)
                     .and_then(handle_passionfruit_request);
 
-                // 靜態前端檔案路由（最後匹配）
                 let static_route = warp::path::tail().and_then(move |path: warp::path::Tail| {
                     let web_root = web_root.clone();
                     let mod_update_root = mod_update_root.clone();
                     async move { handle_static_file(path, web_root, mod_update_root).await }
                 });
 
-                // 路由優先級：status > passionfruit > static
                 let routes = status_route
                     .or(passionfruit_route)
                     .or(static_route)
@@ -250,6 +265,7 @@ pub fn run() {
             commands::delete_account,
             commands::set_active_account,
             commands::get_active_account,
+            commands::open_account_window,
             commands::save_yaml,
             commands::load_yaml,
             commands::check_resource_exists,

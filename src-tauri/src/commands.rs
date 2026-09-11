@@ -4,7 +4,7 @@ use crate::mod_updater;
 use crate::AppState;
 use serde_json::Value;
 use std::fs;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 #[tauri::command]
 pub fn get_accounts() -> Vec<Value> {
@@ -33,6 +33,91 @@ pub fn set_active_account(idx: usize) -> bool {
 #[tauri::command]
 pub fn get_active_account() -> Option<Value> {
     account_manager::get_active_account()
+}
+
+fn stable_account_hash(account: &str, salt: &str) -> u64 {
+    // 使用固定 FNV-1a，確保不同進程／重新啟動後仍會得到同一個 session 目錄。
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in format!("{salt}:{account}").as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn process_data_store_identifier(seed: &str) -> [u8; 16] {
+    let first = stable_account_hash(seed, "ReversedFront-macos-1").to_le_bytes();
+    let second = stable_account_hash(seed, "ReversedFront-macos-2").to_le_bytes();
+    let mut identifier = [0u8; 16];
+    identifier[..8].copy_from_slice(&first);
+    identifier[8..].copy_from_slice(&second);
+    identifier
+}
+
+/// 開啟指定帳號的獨立桌面視窗。
+/// 每個視窗使用自己的 WebView 資料目錄／macOS data store，因此 cookie、
+/// localStorage、WebSocket 登入狀態不會與主視窗或其他帳號視窗共用。
+#[tauri::command]
+pub fn open_account_window(
+    app: AppHandle,
+    state: State<AppState>,
+    account_index: usize,
+) -> Result<(), String> {
+    let accounts = account_manager::get_accounts();
+    let account = accounts
+        .get(account_index)
+        .and_then(|value| value.get("account"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "找不到指定帳號".to_string())?;
+
+    let account_hash = stable_account_hash(account, "ReversedFront-account-window");
+    let label = format!("rf-account-{account_hash:016x}");
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("無法取得帳號視窗資料目錄：{error}"))?;
+    let session_dir = app_data_dir
+        .join("account-sessions")
+        .join(format!("{}-{account_hash:016x}", std::process::id()));
+    fs::create_dir_all(&session_dir)
+        .map_err(|error| format!("無法建立帳號視窗資料目錄：{error}"))?;
+
+    let encoded_account = urlencoding::encode(account);
+    let url = format!(
+        "{}/?rf_account={}#/users/log_in",
+        state.server_base_url, encoded_account
+    );
+    let webview_url = WebviewUrl::External(
+        url.parse()
+            .map_err(|error| format!("帳號視窗網址無效：{error}"))?,
+    );
+
+    let builder = WebviewWindowBuilder::new(&app, &label, webview_url)
+        .title("ReversedFront")
+        .inner_size(1280.0, 720.0)
+        .min_inner_size(800.0, 600.0)
+        .resizable(true)
+        .data_directory(session_dir);
+
+    #[cfg(target_os = "macos")]
+    let builder = {
+        let process_seed = format!("{}:{account}", std::process::id());
+        builder.data_store_identifier(process_data_store_identifier(&process_seed))
+    };
+
+    builder
+        .build()
+        .map_err(|error| format!("無法開啟帳號視窗：{error}"))?;
+    Ok(())
 }
 
 #[tauri::command]

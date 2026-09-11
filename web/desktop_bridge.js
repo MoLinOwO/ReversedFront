@@ -6,10 +6,33 @@
   'use strict';
 
   var localeKey = 'rf.desktop.locale';
+  var normalizeLocale = function (locale) {
+    switch (String(locale || '').replace('-', '_')) {
+      case 'zh_Hant':
+      case 'zh_TW':
+      case 'zh_TW_#Hant':
+        return 'zh_TW';
+      case 'zh_Hans':
+      case 'zh_CN':
+      case 'zh_CN_#Hans':
+        return 'zh_CN';
+      case 'ja':
+      case 'ja_JP':
+      case 'jp':
+        return 'jp';
+      case 'en':
+      case 'en_US':
+      case 'en_GB':
+        return 'en';
+      default:
+        return 'zh_TW';
+    }
+  };
   var storedLocale = null;
   try {
     storedLocale = window.localStorage.getItem(localeKey);
   } catch (_) {}
+  var locale = normalizeLocale(storedLocale);
 
   if (!window.deviceInfo) {
     window.deviceInfo = {
@@ -17,7 +40,7 @@
       deviceType: 'desktop',
       platform: 'windows',
       uniqueId: 'rf-desktop',
-      locale: storedLocale || 'zh-Hant',
+      locale: locale,
       // The desktop shell uses the normal local/remote resource path and has
       // no mobile foreground-download prompt.
       promptedExtraDownload: 'background',
@@ -83,9 +106,9 @@
         switch (message.action) {
           case 'SETTING:locale':
             if (message.data && message.data.locale) {
-              window.deviceInfo.locale = message.data.locale;
+              window.deviceInfo.locale = normalizeLocale(message.data.locale);
               try {
-                window.localStorage.setItem(localeKey, message.data.locale);
+                window.localStorage.setItem(localeKey, window.deviceInfo.locale);
               } catch (_) {}
             }
             break;

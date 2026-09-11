@@ -19,6 +19,7 @@
     ],
     "resources": {
       "resources/index.html": "./",
+      "resources/desktop_bridge.js": "./desktop_bridge.js",
       "resources/manifest.json": "./",
       "resources/transporter.html": "./",
       "resources/static": "./static",

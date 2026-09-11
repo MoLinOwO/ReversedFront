@@ -73,7 +73,7 @@ pub fn get_config_file() -> PathBuf {
 }
 
 /// 帳號資料永遠放在使用者資料目錄，不放進專案的 web 資源或 config.json。
-/// 這個檔案只會在程式執行後由使用者端建立，因此不會被 Tauri 打包帶走。
+/// 這個資料庫只會在程式執行後由使用者端建立，因此不會被 Tauri 打包帶走。
 pub fn get_account_store_file() -> PathBuf {
     let base = USER_DATA_BASE_PATH
         .get()
@@ -84,7 +84,15 @@ pub fn get_account_store_file() -> PathBuf {
         })
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    base.join("accounts.json")
+    base.join("accounts.db")
+}
+
+/// 舊版帳號檔案的位置，只供第一次啟動時匯入，之後不再作為資料來源。
+pub fn get_legacy_account_store_file() -> PathBuf {
+    get_account_store_file()
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("accounts.json")
 }
 
 pub fn load_config() -> Value {

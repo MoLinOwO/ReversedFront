@@ -12,10 +12,17 @@ npm run mod:build
 npm run dev
 ```
 
-The Tauri shell serves the frontend on `127.0.0.1:8765`, provides the native
-commands used by the Mod, and downloads missing `passionfruit` resources to
-the per-user cache instead of embedding the multi-gigabyte media folder in
-the installer.
+The Tauri shell serves the frontend on an available loopback port selected at
+startup, provides the native commands used by the Mod, and downloads missing
+`passionfruit` resources to the per-user cache instead of embedding the
+multi-gigabyte media folder in the installer. Each running process gets its
+own port and WebView data directory, so multiple ReversedFront processes can
+run at the same time.
+
+Account credentials and per-account Mod settings are stored in the user data
+directory as `accounts.db` (SQLite), not in the project or installer. An old
+`accounts.json` is imported once on upgrade and then removed after a
+successful database transaction.
 
 ## Mod online updates
 
