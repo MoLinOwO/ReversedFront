@@ -94,6 +94,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         // Skip unwanted files and directories
         if file_name_str.ends_with(".pfx")
             || file_name_str == "config.json"
+            || file_name_str == "accounts.json"
             || file_name_str == "node_modules"
             || file_name_str == "package.json"
             || file_name_str == "package-lock.json"

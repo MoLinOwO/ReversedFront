@@ -50,8 +50,11 @@ main.dist/
 *.p12
 *.pem
 *.key
+config.json
+accounts.json
 web/mod/data/*.pfx
 web/mod/data/config.json
+web/mod/data/accounts.json
 
 # 資源文件
 web/passionfruit/

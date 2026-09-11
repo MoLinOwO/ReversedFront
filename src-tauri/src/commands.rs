@@ -103,8 +103,7 @@ pub fn exit_app(app: AppHandle) {
 #[tauri::command]
 pub fn save_config_volume(data: String) -> bool {
     if let Ok(json) = serde_json::from_str::<Value>(&data) {
-        config_manager::update_config_fields(json);
-        true
+        account_manager::update_account_settings(json)
     } else {
         false
     }
@@ -112,28 +111,20 @@ pub fn save_config_volume(data: String) -> bool {
 
 #[tauri::command]
 pub fn get_config_volume(target_account: Option<Value>) -> Value {
-    // Convert Value to String if it's an object, or handle it directly
-    let target_str = if let Some(val) = target_account {
-        serde_json::to_string(&val).ok()
-    } else {
-        None
-    };
-    config_manager::get_account_settings(target_str)
+    account_manager::get_account_settings(target_account)
 }
 
 #[tauri::command]
-pub fn save_report_faction_filter(faction: String, _target_account: Option<Value>) -> bool {
-    // Simplified
-    config_manager::update_config_fields(serde_json::json!({
-        "report_faction_filter": faction
-    }));
-    true
+pub fn save_report_faction_filter(faction: String, target_account: Option<Value>) -> bool {
+    account_manager::update_account_settings(serde_json::json!({
+        "report_faction_filter": faction,
+        "target_account": target_account
+    }))
 }
 
 #[tauri::command]
-pub fn get_report_faction_filter(_target_account: Option<Value>) -> String {
-    let config = config_manager::load_config();
-    config
+pub fn get_report_faction_filter(target_account: Option<Value>) -> String {
+    account_manager::get_account_settings(target_account)
         .get("report_faction_filter")
         .and_then(|v| v.as_str())
         .unwrap_or("全部")
@@ -154,6 +145,40 @@ pub async fn check_for_updates(app: AppHandle) -> Value {
         Ok(info) => serde_json::to_value(info).unwrap(),
         Err(e) => serde_json::json!({ "error": e }),
     }
+}
+
+/// 一次查詢桌面版與 Mod 版本，交給前端顯示同一個更新通知。
+#[tauri::command]
+pub async fn check_all_updates(app: AppHandle) -> Value {
+    let version = app.package_info().version.to_string();
+    let app_result = updater::check_update(&version).await;
+    let mod_result = mod_updater::check_for_update(&app).await;
+
+    let app_update = match app_result {
+        Ok(info) => serde_json::json!({
+            "ok": true,
+            "info": info
+        }),
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "error": error
+        }),
+    };
+    let mod_update = match mod_result {
+        Ok(info) => serde_json::json!({
+            "ok": true,
+            "info": info
+        }),
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "error": error
+        }),
+    };
+
+    serde_json::json!({
+        "app": app_update,
+        "mod": mod_update
+    })
 }
 
 #[tauri::command]

@@ -242,29 +242,6 @@ pub fn run() {
                 warp::serve(routes).run(([127, 0, 0, 1], 8765)).await;
             });
 
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                let version = handle.package_info().version.to_string();
-                if let Ok(info) = updater::check_update(&version).await {
-                    if info.has_update {
-                        // Call window.onUpdateFound(filename, version, url)
-                        if let Some(window) = handle.get_webview_window("main") {
-                            let filename =
-                                serde_json::to_string(&info.filename).unwrap_or_default();
-                            let version = serde_json::to_string(&info.version).unwrap_or_default();
-                            let download_url =
-                                serde_json::to_string(&info.download_url).unwrap_or_default();
-                            let script = format!(
-                                "if(window.onUpdateFound) window.onUpdateFound({}, {}, {});",
-                                filename, version, download_url
-                            );
-                            let _ = window.eval(&script);
-                        }
-                    }
-                }
-            });
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -284,6 +261,7 @@ pub fn run() {
             commands::get_config_volume,
             commands::log_message,
             commands::check_for_updates,
+            commands::check_all_updates,
             commands::perform_update,
             commands::check_mod_update,
             commands::download_mod_update,
