@@ -65,12 +65,11 @@ jobs:
             libsoup-3.0-dev
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version '^2.0.0' --locked
+        run: npm ci
 
       # Mod 原始碼不放入公開 repository；已編譯的 bundle/data 直接隨應用程式打包。
       - name: Build Tauri application
-        working-directory: src-tauri
-        run: cargo tauri build ${{ matrix.args }}
+        run: npx tauri build ${{ matrix.args }}
 
       - name: Rename Windows artifacts
         if: matrix.platform == 'windows-latest'
