@@ -7,9 +7,9 @@
     <title>ReversedFront</title>
     <script defer="defer" src="./desktop_bridge.js"></script>
     <link href="./static/css/main.550f37e9.css" rel="stylesheet" />
-    <!-- Mod 先載入，讓遊戲建立 WebSocket 前就能擷取即時城市資料。 -->
-    <script defer="defer" src="./mod/js/main.bundle.js"></script>
     <script defer="defer" src="./static/js/main.6980f94d.js"></script>
+    <!-- 官方前端先初始化；Mod 隨後以唯讀方式監測遊戲資料。 -->
+    <script defer="defer" src="./mod/js/main.bundle.js"></script>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
