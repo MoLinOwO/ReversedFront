@@ -1,5 +1,5 @@
 {
-  "productName": "ReversedFront Desktop",
+  "productName": "ReversedFront",
   "version": "3.1.0",
   "identifier": "com.reversedfront.desktop",
   "build": {
@@ -46,7 +46,7 @@
   "app": {
     "windows": [
       {
-      "title": "逆統戰：烽火",
+      "title": "ReversedFront",
         "url": "http://127.0.0.1:8765",
         "width": 1280,
         "height": 720,

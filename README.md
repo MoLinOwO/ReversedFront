@@ -1,4 +1,4 @@
-# ReversedFront Desktop
+# ReversedFront
 
 This project wraps the latest RF web build in the original Tauri/Rust desktop
 application style. It keeps the latest frontend assets and loads the Mod

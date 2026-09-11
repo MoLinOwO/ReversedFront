@@ -39,10 +39,11 @@ fs.writeFileSync(tauriConfigPath, `${JSON.stringify(tauriConfig, null, 2)}\n`);
 
 const cargoPath = path.join(root, 'src-tauri', 'Cargo.toml');
 const cargo = fs.readFileSync(cargoPath, 'utf8');
-const updatedCargo = cargo.replace(/^version\s*=\s*"[^"]+"/m, `version = "${version}"`);
-if (updatedCargo === cargo) {
+const cargoVersionPattern = /^version\s*=\s*"[^"]+"/m;
+if (!cargoVersionPattern.test(cargo)) {
     throw new Error('Could not update src-tauri/Cargo.toml package version');
 }
+const updatedCargo = cargo.replace(cargoVersionPattern, `version = "${version}"`);
 fs.writeFileSync(cargoPath, updatedCargo);
 
 console.log(`Release version set to ${version}`);
