@@ -75,7 +75,7 @@
   function openExternalUrl(url) {
     if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
       window.__TAURI__.core.invoke('open_external_url', { url: url }).catch(function () {
-        window.open(url, '_blank', 'noopener,noreferrer');
+        openInGameOverlay(url, 'Discord 社群', 'Discord 社群', true);
       });
       return;
     }
@@ -150,26 +150,42 @@
     });
   }
 
-  function openMarketOverlay() {
-    var existing = document.getElementById('rf-market-overlay');
+  function openInGameOverlay(url, titleText, ariaLabel, floating) {
+    var existing = document.getElementById('rf-in-app-overlay');
     if (existing) {
       existing.style.display = 'flex';
       var existingFrame = existing.querySelector('iframe');
-      if (existingFrame) existingFrame.focus();
+      if (existingFrame) {
+        existingFrame.src = url;
+        existingFrame.title = titleText;
+        existingFrame.focus();
+      }
       return;
     }
 
     var overlay = document.createElement('section');
-    overlay.id = 'rf-market-overlay';
+    overlay.id = 'rf-in-app-overlay';
     overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-label', 'ReversedFront 遊戲商城');
+    overlay.setAttribute('aria-label', ariaLabel);
     Object.assign(overlay.style, {
       position: 'fixed',
-      inset: '0',
       zIndex: '2147483646',
       display: 'flex',
       flexDirection: 'column',
-      background: '#080808'
+      background: '#080808',
+      ...(floating ? {
+        left: '50%',
+        top: '50%',
+        width: 'min(900px, calc(100vw - 32px))',
+        height: 'min(700px, calc(100vh - 32px))',
+        transform: 'translate(-50%, -50%)',
+        border: '1px solid #806d42',
+        borderRadius: '12px',
+        boxShadow: '0 12px 48px #000c',
+        overflow: 'hidden'
+      } : {
+        inset: '0'
+      })
     });
 
     var toolbar = document.createElement('header');
@@ -184,16 +200,18 @@
       color: '#f4ead2',
       background: '#17130d',
       borderBottom: '1px solid #806d42',
-      font: '600 18px "Noto Serif TC", serif'
+      font: '600 18px "Noto Serif TC", serif',
+      cursor: floating ? 'move' : 'default',
+      userSelect: 'none'
     });
 
     var title = document.createElement('span');
-    title.textContent = 'ReversedFront · 遊戲商城';
+    title.textContent = titleText;
 
     var close = document.createElement('button');
     close.type = 'button';
     close.textContent = '×';
-    close.setAttribute('aria-label', '關閉遊戲商城');
+    close.setAttribute('aria-label', '關閉' + titleText);
     Object.assign(close.style, {
       width: '38px',
       height: '38px',
@@ -207,8 +225,8 @@
     });
 
     var frame = document.createElement('iframe');
-    frame.src = 'https://reversedfront.tw/market/';
-    frame.title = 'ReversedFront 遊戲商城';
+    frame.src = url;
+    frame.title = titleText;
     frame.referrerPolicy = 'strict-origin-when-cross-origin';
     frame.allow = 'clipboard-read; clipboard-write; payment';
     Object.assign(frame.style, {
@@ -221,9 +239,49 @@
 
     var previousOverflow = document.body.style.overflow;
     var closeOverlay = function () {
+      cleanupDrag();
       document.body.style.overflow = previousOverflow;
       overlay.remove();
     };
+    var cleanupDrag = function () {};
+
+    if (floating) {
+      var isDragging = false;
+      var offsetX = 0;
+      var offsetY = 0;
+      var onMouseMove = function (event) {
+        if (!isDragging) return;
+        var maxLeft = Math.max(0, window.innerWidth - overlay.offsetWidth);
+        var maxTop = Math.max(0, window.innerHeight - overlay.offsetHeight);
+        var left = Math.max(0, Math.min(maxLeft, event.clientX - offsetX));
+        var top = Math.max(0, Math.min(maxTop, event.clientY - offsetY));
+        overlay.style.left = left + 'px';
+        overlay.style.top = top + 'px';
+      };
+      var onMouseUp = function () {
+        isDragging = false;
+        document.body.style.userSelect = '';
+      };
+      toolbar.addEventListener('mousedown', function (event) {
+        if (event.button !== 0 || event.target.closest('button')) return;
+        var rect = overlay.getBoundingClientRect();
+        isDragging = true;
+        offsetX = event.clientX - rect.left;
+        offsetY = event.clientY - rect.top;
+        overlay.style.transform = 'none';
+        overlay.style.left = rect.left + 'px';
+        overlay.style.top = rect.top + 'px';
+        document.body.style.userSelect = 'none';
+        event.preventDefault();
+      });
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+      cleanupDrag = function () {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        document.body.style.userSelect = '';
+      };
+    }
     close.addEventListener('click', closeOverlay);
     overlay.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') {
@@ -289,7 +347,12 @@
             });
             break;
           case 'IAP:buyProduct':
-            openMarketOverlay();
+            openInGameOverlay(
+              'https://reversedfront.tw/market/',
+              'ReversedFront · 遊戲商城',
+              'ReversedFront 遊戲商城',
+              false
+            );
             // The game shows its processing modal until the native billing
             // bridge reports phase-one completion. Desktop hands payment off
             // to the embedded web market, so finish that native phase without
