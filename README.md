@@ -13,6 +13,8 @@ npm run dev
 
 Node 依賴只由根目錄的 `package.json` 管理。`npm run mod:build` 會把本機 Mod 原始碼編譯為 `web/mod/js/main.bundle.js` 與必要的分割 bundle。
 
+`web/asset-manifest.json` 是官方前端的完整資源清單；發版檢查會驗證其中每個檔案，包含只在執行期選取、無法由靜態字串搜尋判定的商城素材。
+
 ## 多程序與資料
 
 - 每個 ReversedFront 程序使用獨立的隨機 loopback port 與鎖定槽位；槽位各自有持久 WebView 資料目錄，因此可同時登入不同帳號並記住各自選擇。
@@ -20,6 +22,7 @@ Node 依賴只由根目錄的 `package.json` 管理。`npm run mod:build` 會把
 - Windows 可攜版在執行檔目錄可寫時把帳號與下載素材放在該目錄；標準安裝目錄不可寫時會安全退回應用程式資料目錄。
 - macOS 與 Linux 不寫入唯讀的 app bundle／系統安裝目錄，會使用平台的應用程式資料目錄。
 - 遊戲關卡資料由執行中的官方前端通訊動態擷取；`RFcity.yaml` 不再是必要資料來源。靜態 `transportRoutes.json` 僅作航線資料的備援。
+- Mod 的城鎮詳情、排行榜、退出確認、更新通知與音量設定共用響應式彈窗配置；內容過長時只在彈窗內捲動，不會遮斷地圖航線資料。
 
 ## 公開版本與更新
 
@@ -30,6 +33,8 @@ Node 依賴只由根目錄的 `package.json` 管理。`npm run mod:build` 會把
 Tauri 的 `frontendDist` 只指向 `src-tauri/web` 的最小占位頁；真正執行的前端由 `build.rs` 依白名單複製，避免整個開發目錄或未編譯 JS 被嵌入安裝包。
 
 桌面版與 Mod 都從 `ReversedFront_Public` 檢查更新，前端只顯示一個整合更新通知。Mod 下載只接受公開倉庫中編譯好的 bundle 與白名單資料檔；內建 Mod 基準版本會在編譯時自動對齊 Git commit。
+
+桌面版交易按下確認後，會在同一個遊戲 WebView 內嵌官方商城頁面；關閉商城即可返回遊戲，不會建立第二個商城桌面視窗。
 
 ## 發版
 

@@ -15,10 +15,24 @@ const trackedFiles = execFileSync('git', ['ls-files', '-z'], {
 const errors = [];
 const requiredFiles = [
   'src-tauri/web/index.html',
+  'web/asset-manifest.json',
   'web/mod/js/main.bundle.js',
   'web/mod/data/exit_prompts.yaml',
   'web/mod/data/transportRoutes.json'
 ];
+
+const assetManifestPath = path.join(projectRoot, 'web/asset-manifest.json');
+if (fs.existsSync(assetManifestPath)) {
+  const assetManifest = JSON.parse(fs.readFileSync(assetManifestPath, 'utf8'));
+  for (const asset of Object.values(assetManifest.files || {})) {
+    const relative = String(asset).replace(/^\.\//, '');
+    const normalized = relative.replace(/\.([0-9a-f]{20})\.\1\./i, '.$1.');
+    if (!fs.existsSync(path.join(projectRoot, 'web', relative))
+      && !fs.existsSync(path.join(projectRoot, 'web', normalized))) {
+      errors.push(`官方 asset manifest 指向不存在的資源：${relative}`);
+    }
+  }
+}
 
 const tauriConfigPath = path.join(projectRoot, 'src-tauri/tauri.conf.json');
 const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8'));
@@ -70,6 +84,16 @@ if (fs.existsSync(bundlePath)) {
   const bundle = fs.readFileSync(bundlePath, 'utf8');
   if (/sourceMappingURL\s*=/.test(bundle)) {
     errors.push('main.bundle.js 不得引用 source map');
+  }
+}
+
+const desktopBridgePath = path.join(projectRoot, 'web/desktop_bridge.js');
+if (fs.existsSync(desktopBridgePath)) {
+  try {
+    // Parse only. The bridge needs browser globals and must not execute in Node.
+    new Function(fs.readFileSync(desktopBridgePath, 'utf8'));
+  } catch (error) {
+    errors.push(`desktop_bridge.js 語法錯誤：${error.message}`);
   }
 }
 

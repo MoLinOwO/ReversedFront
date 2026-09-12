@@ -94,6 +94,142 @@
     });
   }
 
+  // The official bundle asks the native mobile billing SDK for these records.
+  // A desktop WebView has no Play/App Store SDK, so return the same fallback
+  // catalogue embedded by the official web build. Unknown future product IDs
+  // are still returned with neutral fields so their UI does not disappear.
+  var desktopIapCatalog = {
+    iapb_341: { localizedPrice: '$100.00', price: '100' },
+    iapbc_4: { localizedPrice: '$290.00', price: '290' },
+    iapb_7: { localizedPrice: '$250.00', price: '250' },
+    iapbc_7: { localizedPrice: '$300.00', price: '300' },
+    iapb_67: { localizedPrice: '$190.00', price: '190' },
+    iapb_6: { localizedPrice: '$200.00', price: '200' },
+    iapb_8: { localizedPrice: '$250.00', price: '250' },
+    iapb_347: { localizedPrice: '$450.00', price: '450' }
+  };
+
+  function desktopIapProducts(productIds) {
+    var seen = Object.create(null);
+    return (Array.isArray(productIds) ? productIds : []).filter(function (productId) {
+      if (!productId || seen[productId]) return false;
+      seen[productId] = true;
+      return true;
+    }).map(function (productId) {
+      var known = desktopIapCatalog[productId] || {};
+      return {
+        countryCode: 'TWN',
+        currency: 'TWD',
+        description: '',
+        discounts: [],
+        introductoryPrice: '',
+        introductoryPriceAsAmountIOS: '',
+        introductoryPriceNumberOfPeriodsIOS: '',
+        introductoryPricePaymentModeIOS: '',
+        introductoryPriceSubscriptionPeriodIOS: '',
+        localizedPrice: known.localizedPrice || '',
+        price: known.price || '',
+        productId: productId,
+        subscriptionPeriodNumberIOS: '0',
+        subscriptionPeriodUnitIOS: '',
+        title: '',
+        type: 'iap'
+      };
+    });
+  }
+
+  function openMarketOverlay() {
+    var existing = document.getElementById('rf-market-overlay');
+    if (existing) {
+      existing.style.display = 'flex';
+      var existingFrame = existing.querySelector('iframe');
+      if (existingFrame) existingFrame.focus();
+      return;
+    }
+
+    var overlay = document.createElement('section');
+    overlay.id = 'rf-market-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-label', 'ReversedFront 遊戲商城');
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      inset: '0',
+      zIndex: '2147483646',
+      display: 'flex',
+      flexDirection: 'column',
+      background: '#080808'
+    });
+
+    var toolbar = document.createElement('header');
+    Object.assign(toolbar.style, {
+      boxSizing: 'border-box',
+      height: '48px',
+      flex: '0 0 48px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '0 10px 0 18px',
+      color: '#f4ead2',
+      background: '#17130d',
+      borderBottom: '1px solid #806d42',
+      font: '600 18px "Noto Serif TC", serif'
+    });
+
+    var title = document.createElement('span');
+    title.textContent = 'ReversedFront · 遊戲商城';
+
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '×';
+    close.setAttribute('aria-label', '關閉遊戲商城');
+    Object.assign(close.style, {
+      width: '38px',
+      height: '38px',
+      padding: '0',
+      border: '1px solid #806d42',
+      borderRadius: '6px',
+      color: '#f4ead2',
+      background: '#2a2115',
+      cursor: 'pointer',
+      font: '30px/32px sans-serif'
+    });
+
+    var frame = document.createElement('iframe');
+    frame.src = 'https://reversedfront.tw/market/';
+    frame.title = 'ReversedFront 遊戲商城';
+    frame.referrerPolicy = 'strict-origin-when-cross-origin';
+    frame.allow = 'clipboard-read; clipboard-write; payment';
+    Object.assign(frame.style, {
+      width: '100%',
+      minHeight: '0',
+      flex: '1 1 auto',
+      border: '0',
+      background: '#fff'
+    });
+
+    var previousOverflow = document.body.style.overflow;
+    var closeOverlay = function () {
+      document.body.style.overflow = previousOverflow;
+      overlay.remove();
+    };
+    close.addEventListener('click', closeOverlay);
+    overlay.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeOverlay();
+      }
+    }, true);
+
+    toolbar.appendChild(title);
+    toolbar.appendChild(close);
+    overlay.appendChild(toolbar);
+    overlay.appendChild(frame);
+    document.body.style.overflow = 'hidden';
+    document.body.appendChild(overlay);
+    close.focus();
+  }
+
   if (!window.ReactNativeWebView) {
     window.ReactNativeWebView = {
       postMessage: function (payload) {
@@ -134,8 +270,22 @@
           case 'APP:fixWebviewHeight':
           case 'DOWNLOAD:dlInfo_show':
           case 'WSS:playerChannelJoined':
+            break;
           case 'IAP:getProducts':
+            emitAppMessage('IAP:products', {
+              products: desktopIapProducts(message.data && message.data.productIds)
+            });
+            break;
           case 'IAP:buyProduct':
+            openMarketOverlay();
+            // The game shows its processing modal until the native billing
+            // bridge reports phase-one completion. Desktop hands payment off
+            // to the embedded web market, so finish that native phase without
+            // presenting an extra error dialog.
+            window.setTimeout(function () {
+              emitAppMessage('IAP:purchaseError', { errorData: {} });
+            }, 0);
+            break;
           case 'LOGIN:google':
           case 'LOGIN:apple':
           case 'LOGIN:facebook':

@@ -45,7 +45,12 @@ fn main() {
 
     // Copy specific directories and files from web/ to src-tauri/resources/
     let dirs_to_copy = vec!["tiles", "static"];
-    let files_to_copy = vec!["index.html", "desktop_bridge.js", "transporter.html"];
+    let files_to_copy = vec![
+        "index.html",
+        "desktop_bridge.js",
+        "favicon.ico",
+        "transporter.html",
+    ];
 
     // Copy directories
     for dir_name in dirs_to_copy {

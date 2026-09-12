@@ -20,6 +20,7 @@
     "resources": {
       "resources/index.html": "./",
       "resources/desktop_bridge.js": "./desktop_bridge.js",
+      "resources/favicon.ico": "./favicon.ico",
       "resources/transporter.html": "./",
       "resources/static": "./static",
       "resources/tiles": "./tiles",
