@@ -70,6 +70,18 @@
     return Promise.resolve(null);
   }
 
+  // 玩家大廳由桌面端交給作業系統的預設瀏覽器開啟，避免 Tauri WebView
+  // 將 window.open 當成應用程式內的新視窗而被攔截或留在空白頁。
+  function openExternalUrl(url) {
+    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+      window.__TAURI__.core.invoke('open_external_url', { url: url }).catch(function () {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      });
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
   function preloadImages(images) {
     var list = Array.isArray(images) ? images : [];
     if (!list.length) {
@@ -263,9 +275,9 @@
             invokeTauri('exit_app');
             break;
           case 'APP:openUrl':
-            if (message.data && message.data.url) {
-              window.open(message.data.url, '_blank', 'noopener,noreferrer');
-            }
+            // 官方前端的 lobby_url 可能由舊伺服器資料提供，桌面版統一
+            // 導向目前有效的 Discord 社群邀請，不依賴該欄位的內容。
+            openExternalUrl('https://discord.com/invite/wyFj4N2mJZ');
             break;
           case 'APP:fixWebviewHeight':
           case 'DOWNLOAD:dlInfo_show':

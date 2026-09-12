@@ -381,6 +381,7 @@ pub fn run() {
             commands::download_resource,
             commands::get_resource_download_status,
             commands::exit_app,
+            commands::open_external_url,
             commands::save_config_volume,
             commands::save_report_faction_filter,
             commands::get_report_faction_filter,

@@ -5,6 +5,7 @@ use crate::AppState;
 use serde_json::Value;
 use std::fs;
 use std::path::{Component, Path};
+use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
@@ -152,6 +153,31 @@ pub fn get_resource_download_status(state: State<AppState>) -> Value {
 pub fn exit_app(app: AppHandle) {
     // 關閉所有視窗並退出應用
     app.exit(0);
+}
+
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "無效的網址".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("只允許透過 HTTPS 開啟外部網址".to_string());
+    }
+
+    let normalized_url = parsed.as_str();
+    let result = if cfg!(target_os = "windows") {
+        Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", normalized_url])
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(normalized_url).spawn()
+    } else if cfg!(target_os = "linux") {
+        Command::new("xdg-open").arg(normalized_url).spawn()
+    } else {
+        return Err("目前平台不支援開啟外部網址".to_string());
+    };
+
+    result
+        .map(|_| ())
+        .map_err(|error| format!("無法啟動預設瀏覽器：{error}"))
 }
 
 #[tauri::command]
