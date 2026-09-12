@@ -1,51 +1,99 @@
 # ReversedFront
 
-ReversedFront 是以 Rust + Tauri 2 封裝的跨平台桌面版，載入新版遊戲前端與編譯後的 Mod。應用程式及主視窗名稱統一為 `ReversedFront`。
+ReversedFront 是《逆統戰：地下世界》的跨平台桌面應用程式，將遊戲、Mod 功能與帳號管理整合在同一個視窗中。開啟後即可直接在桌面版遊玩，不需要另外開啟瀏覽器。
 
-## 開發
+## 下載與支援平台
 
-```powershell
-npm install
-npm run mod:build
-npm test
-npm run dev
-```
+請到 [GitHub Releases](https://github.com/MoLinOwO/ReversedFront/releases) 下載最新版：
 
-Node 依賴只由根目錄的 `package.json` 管理。`npm run mod:build` 會把本機 Mod 原始碼編譯為 `web/mod/js/main.bundle.js` 與必要的分割 bundle。
+- Windows：`.exe` 或 `.msi`
+- macOS：`.dmg`
+- Linux：`.AppImage` 或 `.deb`
 
-`web/asset-manifest.json` 是官方前端的完整資源清單；發版檢查會驗證其中每個檔案，包含只在執行期選取、無法由靜態字串搜尋判定的商城素材。
+應用程式名稱與遊戲視窗名稱皆為 **ReversedFront**。
 
-## 多程序與資料
+## 主要功能
 
-- 每個 ReversedFront 程序使用獨立的隨機 loopback port 與鎖定槽位；槽位各自有持久 WebView 資料目錄，因此可同時登入不同帳號並記住各自選擇。
-- 帳號與各帳號的 Mod 設定存於 SQLite `accounts.db`，不會打包進安裝檔。
-- Windows 可攜版在執行檔目錄可寫時把帳號與下載素材放在該目錄；標準安裝目錄不可寫時會安全退回應用程式資料目錄。
-- macOS 與 Linux 不寫入唯讀的 app bundle／系統安裝目錄，會使用平台的應用程式資料目錄。
-- 遊戲關卡資料由執行中的官方前端通訊動態擷取；`RFcity.yaml` 不再是必要資料來源。靜態 `transportRoutes.json` 僅作航線資料的備援。
-- Mod 的城鎮詳情、排行榜、退出確認、更新通知與音量設定共用響應式彈窗配置；內容過長時只在彈窗內捲動，不會遮斷地圖航線資料。
+### 桌面遊戲視窗
 
-## 公開版本與更新
+- 在獨立的桌面視窗內載入遊戲。
+- 不會自動另外開啟瀏覽器遊戲頁面。
+- 保留遊戲原本的登入、地圖與主大廳流程。
+- 遊戲資源會依需要下載並更新，不必手動整理素材檔案。
 
-目前 Git remote `origin` 指向 `MoLinOwO/ReversedFront_Public`。公開倉庫只追蹤編譯後的 Mod bundle 與資料，不追蹤 `web/mod/js` 下的原始模組。原始模組只存在本機工作目錄並受 `.gitignore` 保護；若需要異地備份，應另建私人倉庫。
+### Mod 遊戲資訊
 
-`npm run validate:release` 會阻止 Mod 原始碼、source map、帳號資料、資料庫或憑證進入發版。GitHub Actions 在收到 `v*` tag 後，先執行此檢查，再為 Windows、Linux、macOS 打包並建立同一個 GitHub Release。
+- 自動取得遊戲目前使用的關卡資料與掉落資訊。
+- 顯示城鎮名稱、主權、控制勢力、NPC 支援與佔領獎勵。
+- 城鎮可改名時，會在有資料的情況下顯示「現城鎮名稱（原城鎮名稱）」。
+- 可排除主線劇情獎勵，只查看一般城鎮與活動掉落。
+- 顯示勢力圖層，方便查看各勢力控制範圍。
+- 支援城市之間的飛機與港口航線，地圖資訊更新時不會被破壞。
+- 支援自訂士兵圖示。
+- 城鎮資訊與彈窗會隨視窗大小調整，長內容會在彈窗內捲動，不會超出畫面。
 
-Tauri 的 `frontendDist` 只指向 `src-tauri/web` 的最小占位頁；真正執行的前端由 `build.rs` 依白名單複製，避免整個開發目錄或未編譯 JS 被嵌入安裝包。
+### 帳號與多開
 
-桌面版與 Mod 都從 `ReversedFront_Public` 檢查更新，前端只顯示一個整合更新通知。Mod 下載只接受公開倉庫中編譯好的 bundle 與白名單資料檔；內建 Mod 基準版本會在編譯時自動對齊 Git commit。
+- 可保存多個遊戲帳號。
+- 每個帳號都有獨立的登入狀態與 Mod 設定，互不覆蓋。
+- 可同時開啟多個 ReversedFront 視窗，分別登入不同帳號。
+- 啟用自動登入時，程式會先將帳號與密碼填入遊戲欄位，再按下登入，維持原本的登入流程。
+- 帳號資料使用本機資料庫保存，不會被打包進安裝檔，也不會上傳到 GitHub。
 
-桌面版交易按下確認後，會在同一個遊戲 WebView 內嵌官方商城頁面；關閉商城即可返回遊戲，不會建立第二個商城桌面視窗。
+### 商城與交易
 
-## 發版
+- 遊戲內交易確認後，官方商城會直接嵌入目前的遊戲視窗。
+- 不會建立第二個商城桌面視窗，也不需要切換到外部瀏覽器。
+- 關閉商城後即可回到遊戲。
 
-```powershell
-npm run mod:build
-npm test
-git add -A
-git commit -m "release: prepare vX.Y.Z"
-git push origin main
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
+### 線上更新
 
-不要手動加入被忽略的 Mod 原始碼，也不要提交 `accounts.db`、`config.json`、憑證或 `web/passionfruit`。
+- 桌面版與 Mod 會從 GitHub 檢查新版本。
+- 只顯示一個整合的更新通知，不會分別跳出桌面版與 Mod 兩種通知。
+- Mod 更新只下載已編譯的模組檔案，更新完成後重新啟動即可使用。
+- Windows、macOS、Linux 都由 GitHub Actions 自動產生對應安裝檔。
+
+## 基本使用方式
+
+1. 下載並安裝符合自己系統的版本。
+2. 開啟 **ReversedFront**。
+3. 在帳號管理中新增帳號，或直接輸入遊戲帳號密碼登入。
+4. 需要同時登入其他帳號時，再開啟另一個 ReversedFront 視窗並選擇不同帳號。
+5. 在遊戲中使用地圖、城鎮資訊、勢力圖層與其他 Mod 功能。
+6. 收到更新提示時，依畫面指示更新桌面版或 Mod。
+
+## 資料與安全性說明
+
+- 帳號與 Mod 設定只保存於本機，不會提交到公開 GitHub 專案。
+- 不同視窗使用獨立的登入資料，因此多開時不會互相登出或改掉設定。
+- Windows 可攜版若執行檔目錄可寫，資料會保存於程式目錄附近；標準安裝版、macOS 與 Linux 會使用系統允許的應用程式資料位置。
+- 請不要把帳號資料庫或個人備份檔案上傳到公開倉庫。
+
+## 常見問題
+
+### 更新後沒有看到新 Mod？
+
+請先關閉所有 ReversedFront 視窗，再重新開啟並等待更新完成。若仍未更新，可在更新提示中重新檢查版本。
+
+### 多開後帳號互相影響？
+
+確認每個視窗選擇的是不同帳號。若仍出現登入狀態混用，請完全關閉 ReversedFront 後再重新開啟。
+
+### 城鎮獎勵與遊戲內顯示不同？
+
+部分獎勵會依伺服器、活動或 bundle 版本變化，Mod 會優先讀取目前遊戲前端正在使用的資料；重新載入遊戲後即可取得最新資料。
+
+### 商城在哪裡開啟？
+
+在遊戲內進行交易並按下確認後，商城會在同一個遊戲視窗內顯示。完成或關閉商城即可返回遊戲。
+
+## 問題回報
+
+回報問題時，請附上：
+
+- 作業系統與 ReversedFront 版本
+- 發生問題的操作步驟
+- 是否同時開啟多個視窗
+- 必要時附上錯誤畫面截圖
+
+請勿在問題回報中貼出帳號、密碼、登入 Token 或帳號資料庫檔案。
