@@ -195,6 +195,16 @@ pub fn get_config_volume(target_account: Option<Value>) -> Value {
 }
 
 #[tauri::command]
+pub fn save_locale(locale: String) -> bool {
+    account_manager::save_locale(locale)
+}
+
+#[tauri::command]
+pub fn get_locale() -> Option<String> {
+    account_manager::get_locale()
+}
+
+#[tauri::command]
 pub fn save_report_faction_filter(faction: String, target_account: Option<Value>) -> bool {
     account_manager::update_account_settings(serde_json::json!({
         "report_faction_filter": faction,

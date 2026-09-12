@@ -6,8 +6,10 @@
   'use strict';
 
   var localeKey = 'rf.desktop.locale';
+  var i18nextLocaleKey = 'i18nextLng';
+  var localeRefreshKey = 'rf.desktop.locale.refresh';
   var normalizeLocale = function (locale) {
-    switch (String(locale || '').replace('-', '_')) {
+    switch (String(locale || '').replace(/-/g, '_')) {
       case 'zh_Hant':
       case 'zh_TW':
       case 'zh_TW_#Hant':
@@ -30,22 +32,23 @@
   };
   var storedLocale = null;
   try {
-    storedLocale = window.localStorage.getItem(localeKey);
+    storedLocale = window.localStorage.getItem(localeKey)
+      || window.localStorage.getItem(i18nextLocaleKey);
   } catch (_) {}
   var locale = normalizeLocale(storedLocale);
 
-  if (!window.deviceInfo) {
-    window.deviceInfo = {
-      deviceType: 'desktop',
-      platform: 'windows',
-      uniqueId: 'rf-desktop',
-      locale: locale,
-      // The desktop shell uses the normal local/remote resource path and has
-      // no mobile foreground-download prompt.
-      promptedExtraDownload: 'background',
-      assetsDL_path: ''
-    };
-  }
+  // Always replace the object so the official React context can observe a
+  // locale change.  Some WebView hosts provide a partial deviceInfo object.
+  window.deviceInfo = Object.assign({}, window.deviceInfo || {}, {
+    deviceType: window.deviceInfo?.deviceType || 'desktop',
+    platform: window.deviceInfo?.platform || 'windows',
+    uniqueId: window.deviceInfo?.uniqueId || 'rf-desktop',
+    locale: normalizeLocale(window.deviceInfo?.locale || locale),
+    // The desktop shell uses the normal local/remote resource path and has
+    // no mobile foreground-download prompt.
+    promptedExtraDownload: window.deviceInfo?.promptedExtraDownload || 'background',
+    assetsDL_path: window.deviceInfo?.assetsDL_path || ''
+  });
 
   // The current RF bundle uses this object for mobile-only notifications.
   // Supplying an empty download queue prevents a mobile extra-resource modal
@@ -69,6 +72,74 @@
     }
     return Promise.resolve(null);
   }
+
+  function persistLocale(nextLocale) {
+    var normalizedLocale = normalizeLocale(nextLocale);
+    locale = normalizedLocale;
+    window.deviceInfo = Object.assign({}, window.deviceInfo || {}, {
+      locale: normalizedLocale
+    });
+    try {
+      // Keep both keys for compatibility with the official i18next detector
+      // and older desktop profiles.
+      window.localStorage.setItem(localeKey, normalizedLocale);
+      window.localStorage.setItem(i18nextLocaleKey, normalizedLocale);
+    } catch (_) {}
+    invokeTauri('save_locale', { locale: normalizedLocale }).catch(function () {});
+  }
+
+  // localStorage is only a fast hint.  The shared SQLite state is authoritative
+  // so a new process slot or a second window uses the same language.
+  function loadPersistedLocale() {
+    if (!window.__TAURI__ || !window.__TAURI__.core || !window.__TAURI__.core.invoke) {
+      return;
+    }
+    invokeTauri('get_locale').then(function (savedLocale) {
+      if (!savedLocale) {
+        // Migrate a preference created by v3.2.4 or an older WebView profile
+        // into the shared database without overwriting it with zh_TW.
+        if (storedLocale) {
+          invokeTauri('save_locale', { locale: locale }).catch(function () {});
+        }
+        return;
+      }
+      var normalizedLocale = normalizeLocale(savedLocale);
+      if (normalizedLocale === locale) {
+        try {
+          window.localStorage.setItem(localeKey, normalizedLocale);
+          window.localStorage.setItem(i18nextLocaleKey, normalizedLocale);
+        } catch (_) {}
+        return;
+      }
+      locale = normalizedLocale;
+      window.deviceInfo = Object.assign({}, window.deviceInfo || {}, {
+        locale: normalizedLocale
+      });
+      var shouldRefresh = false;
+      try {
+        window.localStorage.setItem(localeKey, normalizedLocale);
+        window.localStorage.setItem(i18nextLocaleKey, normalizedLocale);
+        // The official React provider reads deviceInfo during render.  If the
+        // asynchronous SQLite lookup finishes after that render, one reload
+        // makes the persisted locale available from the first render.  The
+        // session marker prevents a reload loop on the same startup.
+        if (window.sessionStorage.getItem(localeRefreshKey) !== normalizedLocale) {
+          window.sessionStorage.setItem(localeRefreshKey, normalizedLocale);
+          shouldRefresh = true;
+        }
+      } catch (_) {}
+      if (shouldRefresh) {
+        window.setTimeout(function () {
+          window.location.reload();
+        }, 0);
+      }
+    }).catch(function () {});
+  }
+
+  // Tauri normally injects __TAURI__ before this script.  The short retry also
+  // covers hosts where the bridge becomes available just after page startup.
+  loadPersistedLocale();
+  window.setTimeout(loadPersistedLocale, 250);
 
   // 玩家大廳由桌面端交給作業系統的預設瀏覽器開啟，避免 Tauri WebView
   // 將 window.open 當成應用程式內的新視窗而被攔截或留在空白頁。
@@ -315,10 +386,7 @@
         switch (message.action) {
           case 'SETTING:locale':
             if (message.data && message.data.locale) {
-              window.deviceInfo.locale = normalizeLocale(message.data.locale);
-              try {
-                window.localStorage.setItem(localeKey, window.deviceInfo.locale);
-              } catch (_) {}
+              persistLocale(message.data.locale);
             }
             break;
           case 'SETTING:promptedExtraDownload':

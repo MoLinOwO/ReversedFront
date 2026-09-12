@@ -383,6 +383,8 @@ pub fn run() {
             commands::exit_app,
             commands::open_external_url,
             commands::save_config_volume,
+            commands::save_locale,
+            commands::get_locale,
             commands::save_report_faction_filter,
             commands::get_report_faction_filter,
             commands::get_config_volume,

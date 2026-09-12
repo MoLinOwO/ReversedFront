@@ -158,6 +158,38 @@ fn first_account_name(tx: &Transaction<'_>) -> rusqlite::Result<Option<String>> 
     .optional()
 }
 
+fn normalize_locale(locale: &str) -> Option<&'static str> {
+    match locale {
+        "zh_TW" | "zh-Hant" | "zh_Hant" | "zh_TW_#Hant" => Some("zh_TW"),
+        "zh_CN" | "zh-Hans" | "zh_Hans" | "zh_CN_#Hans" => Some("zh_CN"),
+        "jp" | "ja" | "ja_JP" => Some("jp"),
+        "en" | "en_US" | "en_GB" => Some("en"),
+        _ => None,
+    }
+}
+
+pub fn get_locale() -> Option<String> {
+    with_transaction(|tx| {
+        Ok(get_state(tx, "locale")?
+            .as_deref()
+            .and_then(normalize_locale)
+            .map(str::to_string))
+    })
+    .flatten()
+}
+
+pub fn save_locale(locale: String) -> bool {
+    let Some(normalized_locale) = normalize_locale(locale.trim()) else {
+        return false;
+    };
+
+    with_transaction(|tx| {
+        set_state(tx, "locale", Some(normalized_locale))?;
+        Ok(true)
+    })
+    .unwrap_or(false)
+}
+
 fn account_name_at(tx: &Transaction<'_>, index: usize) -> rusqlite::Result<Option<String>> {
     tx.query_row(
         "SELECT account FROM accounts ORDER BY id ASC LIMIT 1 OFFSET ?1",
