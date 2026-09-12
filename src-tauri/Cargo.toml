@@ -1,6 +1,6 @@
 [package]
 name = "rf-desktop"
-version = "3.1.0"
+version = "3.2.4"
 description = "Reversed Front Desktop App"
 authors = ["you"]
 edition = "2021"
@@ -22,6 +22,7 @@ num_cpus = "1.0"
 directories = "6.0.0"
 rusqlite = { version = "0.32", features = ["bundled"] }
 fs2 = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # 編譯速度優化
 [profile.dev]

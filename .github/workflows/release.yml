@@ -130,3 +130,58 @@ jobs:
             src-tauri/target/**/bundle/nsis/*.exe
             src-tauri/target/**/bundle/dmg/*.dmg
             src-tauri/target/**/bundle/macos/*.app.tar.gz
+
+  publish-update-manifest:
+    needs: build-and-release
+    runs-on: ubuntu-22.04
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      COMMIT_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # fallback 更新只發布編譯後的 Mod bundle 與公開資料，不包含原始 JS。
+      - name: Package compiled Mod
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mod-package/js mod-package/data
+          cp web/mod/js/*.bundle.js mod-package/js/
+          find web/mod/data -maxdepth 1 -type f \( \
+            -name '*.yaml' -o -name '*.yml' -o -name '*.json' -o -name '*.svg' \
+          \) -exec cp {} mod-package/data/ \;
+          (cd mod-package && zip -qr "../ReversedFront_Mod_${RELEASE_TAG}.zip" js data)
+
+      - name: Generate static update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+          cat > update.json <<EOF
+          {
+            "tag_name": "${RELEASE_TAG}",
+            "assets": [
+              {"name": "ReversedFront_${RELEASE_TAG}.exe", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.exe"},
+              {"name": "ReversedFront_${RELEASE_TAG}.msi", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.msi"},
+              {"name": "ReversedFront_${RELEASE_TAG}.AppImage", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.AppImage"},
+              {"name": "ReversedFront_${RELEASE_TAG}.deb", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.deb"},
+              {"name": "ReversedFront_${RELEASE_TAG}.dmg", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.dmg"},
+              {"name": "ReversedFront_${RELEASE_TAG}.app.tar.gz", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.app.tar.gz"}
+            ],
+            "mod": {
+              "remoteRef": "${COMMIT_SHA}",
+              "downloadUrl": "${release_base}/ReversedFront_Mod_${RELEASE_TAG}.zip",
+              "filename": "ReversedFront_Mod_${RELEASE_TAG}.zip"
+            }
+          }
+          EOF
+          node -e "JSON.parse(require('fs').readFileSync('update.json', 'utf8'))"
+
+      - name: Publish static update manifest and Mod archive
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            update.json
+            ReversedFront_Mod_${{ env.RELEASE_TAG }}.zip

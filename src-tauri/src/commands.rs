@@ -272,8 +272,19 @@ pub async fn check_mod_update(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn download_mod_update(app: AppHandle, remote_ref: String) -> Result<Value, String> {
-    mod_updater::download_and_install(&app, &remote_ref).await
+pub async fn download_mod_update(
+    app: AppHandle,
+    remote_ref: String,
+    download_url: Option<String>,
+    filename: Option<String>,
+) -> Result<Value, String> {
+    mod_updater::download_and_install(
+        &app,
+        &remote_ref,
+        download_url.as_deref(),
+        filename.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]

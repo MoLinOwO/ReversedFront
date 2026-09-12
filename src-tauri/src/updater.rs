@@ -5,13 +5,16 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-const REPOSITORY: &str = "MoLinOwO/ReversedFront_Public";
+const REPOSITORY: &str = "MoLinOwO/ReversedFront";
 const RELEASES_API_URL: &str =
-    "https://api.github.com/repos/MoLinOwO/ReversedFront_Public/releases/latest";
+    "https://api.github.com/repos/MoLinOwO/ReversedFront/releases/latest";
+const STATIC_UPDATE_MANIFEST_URL: &str =
+    "https://github.com/MoLinOwO/ReversedFront/releases/latest/download/update.json";
 const GITHUB_RELEASE_DOWNLOAD_PREFIX: &str =
-    "https://github.com/MoLinOwO/ReversedFront_Public/releases/download/";
+    "https://github.com/MoLinOwO/ReversedFront/releases/download/";
 
 #[derive(Debug, Deserialize)]
 struct GithubRelease {
@@ -23,6 +26,12 @@ struct GithubRelease {
 struct GithubReleaseAsset {
     name: String,
     browser_download_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StaticUpdateManifest {
+    tag_name: String,
+    assets: Vec<GithubReleaseAsset>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -87,11 +96,43 @@ fn select_release_asset(release: &GithubRelease) -> Option<&GithubReleaseAsset> 
 /// 桌面程式版本由 Git tag 決定；推送 `v*` tag 觸發 GitHub Actions 編譯後，
 /// 這裡會從同一個 repository 的 latest release 取得對應平台的安裝檔。
 pub async fn check_update(current_version: &str) -> Result<UpdateInfo, String> {
-    let client = Client::builder()
-        .user_agent("ReversedFront-Updater")
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = update_client()?;
 
+    match check_update_from_api(&client, current_version).await {
+        Ok(info) => Ok(info),
+        Err(api_error) => check_update_from_manifest(&client, current_version)
+            .await
+            .map_err(|manifest_error| {
+                format!(
+                    "GitHub API 更新檢查失敗：{}；靜態描述檔 fallback 也失敗：{}",
+                    api_error, manifest_error
+                )
+            }),
+    }
+}
+
+fn update_client() -> Result<Client, String> {
+    Client::builder()
+        .user_agent("ReversedFront-Updater")
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn download_client() -> Result<Client, String> {
+    Client::builder()
+        .user_agent("ReversedFront-Updater")
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(10 * 60))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+async fn check_update_from_api(
+    client: &Client,
+    current_version: &str,
+) -> Result<UpdateInfo, String> {
     let response = client
         .get(RELEASES_API_URL)
         .send()
@@ -115,6 +156,48 @@ pub async fn check_update(current_version: &str) -> Result<UpdateInfo, String> {
             "No supported {} release asset found in {}",
             std::env::consts::OS,
             REPOSITORY
+        ));
+    };
+
+    Ok(UpdateInfo {
+        has_update: is_newer(&remote_version, current_version),
+        version: remote_version,
+        download_url: asset.browser_download_url.clone(),
+        filename: asset.name.clone(),
+    })
+}
+
+async fn check_update_from_manifest(
+    client: &Client,
+    current_version: &str,
+) -> Result<UpdateInfo, String> {
+    let response = client
+        .get(STATIC_UPDATE_MANIFEST_URL)
+        .header("Cache-Control", "no-cache")
+        .send()
+        .await
+        .map_err(|e| format!("靜態更新描述檔請求失敗：{}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("靜態更新描述檔回傳 {}", response.status()));
+    }
+
+    let manifest: StaticUpdateManifest = response
+        .json()
+        .await
+        .map_err(|e| format!("靜態更新描述檔格式錯誤：{}", e))?;
+
+    let remote_version = extract_version(&manifest.tag_name)
+        .ok_or_else(|| format!("靜態更新描述檔版本標籤錯誤：{}", manifest.tag_name))?;
+
+    let manifest_release = GithubRelease {
+        tag_name: manifest.tag_name,
+        assets: manifest.assets,
+    };
+    let Some(asset) = select_release_asset(&manifest_release) else {
+        return Err(format!(
+            "靜態更新描述檔沒有支援 {} 的安裝檔",
+            std::env::consts::OS
         ));
     };
 
@@ -212,10 +295,7 @@ pub fn cleanup_old_installers() {
 pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> Result<(), String> {
     validate_download_request(url, filename)?;
 
-    let client = Client::builder()
-        .user_agent("ReversedFront-Updater")
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = download_client()?;
     let response = client
         .get(url)
         .send()
