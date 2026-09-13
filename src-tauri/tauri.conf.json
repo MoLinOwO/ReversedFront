@@ -1,6 +1,6 @@
 {
   "productName": "ReversedFront",
-  "version": "3.2.5",
+  "version": "3.2.6",
   "identifier": "com.reversedfront.desktop",
   "build": {
     "beforeDevCommand": "",

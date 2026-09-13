@@ -83,6 +83,36 @@ fn download_client() -> Result<Client> {
         .build()?)
 }
 
+fn download_dir(app: &AppHandle) -> Result<PathBuf> {
+    let directory = app.path().download_dir().context("無法取得系統下載目錄")?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory)
+}
+
+fn save_download_file(app: &AppHandle, filename: &str, content: &[u8]) -> Result<PathBuf> {
+    let directory = download_dir(app)?;
+    let destination = directory.join(filename);
+    let partial = directory.join(format!(".{filename}.part-{}", std::process::id()));
+
+    fs::write(&partial, content)?;
+    if destination.exists() {
+        fs::remove_file(&destination)?;
+    }
+    if let Err(error) = fs::rename(&partial, &destination) {
+        let _ = fs::remove_file(&partial);
+        return Err(error.into());
+    }
+    Ok(destination)
+}
+
+fn staging_dir(app: &AppHandle, remote_ref: &str) -> Result<PathBuf> {
+    let sequence = UPDATE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    Ok(download_dir(app)?.join(format!(
+        ".reversedfront-mod-staging-{remote_ref}-{}-{sequence}",
+        std::process::id()
+    )))
+}
+
 pub(crate) fn update_root(app: &AppHandle) -> Result<PathBuf> {
     // Mod 是隨應用程式散佈的前端資源，版本標記與更新後的 bundle
     // 必須和安裝包內的 mod 放在一起，避免 AppData 與安裝目錄各自有一份。
@@ -372,12 +402,11 @@ async fn download_archive_and_install(
         return Err("Mod 更新壓縮檔過大".to_string());
     }
 
+    // Mod 更新包保留在系統下載目錄，方便使用者查閱或重新套用。
+    let download_path = save_download_file(app, filename, &bytes)
+        .map_err(|e| format!("儲存 Mod 更新包失敗：{}", e))?;
     let root = update_root(app).map_err(|e| e.to_string())?;
-    let sequence = UPDATE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let stage = root.join(format!(
-        ".staging-{remote_ref}-{}-{sequence}",
-        std::process::id()
-    ));
+    let stage = staging_dir(app, remote_ref).map_err(|e| e.to_string())?;
     fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
 
     let mut archive = ZipArchive::new(Cursor::new(bytes))
@@ -458,6 +487,7 @@ async fn download_archive_and_install(
         "updated": true,
         "remoteRef": remote_ref,
         "filename": filename,
+        "downloadPath": download_path,
         "source": "GitHub Release update.json",
         "restartRequired": true
     }))
@@ -498,11 +528,7 @@ async fn download_and_install_inner(app: &AppHandle, remote_ref: &str) -> Result
     }
 
     let root = update_root(app)?;
-    let sequence = UPDATE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let stage = root.join(format!(
-        ".staging-{remote_ref}-{}-{sequence}",
-        std::process::id()
-    ));
+    let stage = staging_dir(app, remote_ref)?;
     fs::create_dir_all(&stage)?;
 
     // 所有檔案先下載到 staging，完整成功後才套用，避免網路中斷留下半套 Mod。

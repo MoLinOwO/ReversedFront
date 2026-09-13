@@ -17,11 +17,67 @@ use warp::{http::Response, http::StatusCode, Filter};
 
 pub struct AppState {
     pub resource_manager: Arc<ResourceManager>,
+    pub(crate) app_data_dir: PathBuf,
+    pub(crate) process_slot: usize,
     // 持有期間即代表這個跨程序槽位仍被使用；File drop 時 OS 會釋放鎖。
     _process_slot_lock: fs::File,
 }
 
-const MAX_PROCESS_SLOTS: usize = 64;
+pub(crate) const MAX_PROCESS_SLOTS: usize = 64;
+
+pub(crate) fn update_lock_path(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(".reversedfront-update.lock")
+}
+
+fn lock_is_busy(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::WouldBlock
+        || cfg!(target_os = "windows") && matches!(error.raw_os_error(), Some(32 | 33))
+}
+
+/// 啟動時確認是否有另一個程序正在進行更新。
+/// 可取得鎖時立即釋放，讓正常啟動不會永久佔用更新鎖。
+pub(crate) fn update_is_in_progress(app_data_dir: &Path) -> io::Result<bool> {
+    let lock_path = update_lock_path(app_data_dir);
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(false),
+        Err(error) if lock_is_busy(&error) => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+/// 檢查除了目前程序以外，是否還有 ReversedFront 正在使用程序槽位。
+pub(crate) fn has_other_processes(app_data_dir: &Path, current_slot: usize) -> io::Result<bool> {
+    let lock_dir = app_data_dir.join("process-locks");
+    if !lock_dir.exists() {
+        return Ok(false);
+    }
+
+    for slot in 0..MAX_PROCESS_SLOTS {
+        if slot == current_slot {
+            continue;
+        }
+
+        let path = lock_dir.join(format!("slot-{slot}.lock"));
+        if !path.exists() {
+            continue;
+        }
+
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => {}
+            Err(error) if lock_is_busy(&error) => return Ok(true),
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(false)
+}
 
 fn acquire_process_slot(app_data_dir: &Path) -> io::Result<(usize, fs::File)> {
     let lock_dir = app_data_dir.join("process-locks");
@@ -270,6 +326,15 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get application data directory");
+
+            if update_is_in_progress(&app_data_dir)? {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "ReversedFront 正在更新，請稍後再啟動",
+                )
+                .into());
+            }
+
             let (process_slot, process_slot_lock) = acquire_process_slot(&app_data_dir)?;
             let resource_storage_root = runtime_storage_root(&web_root, &app_data_dir);
             config_manager::set_resource_base_path(resource_storage_root);
@@ -343,6 +408,8 @@ pub fn run() {
 
             app.manage(AppState {
                 resource_manager: resource_manager.clone(),
+                app_data_dir: app_data_dir.clone(),
+                process_slot,
                 _process_slot_lock: process_slot_lock,
             });
 
@@ -408,7 +475,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::acquire_process_slot;
+    use super::{acquire_process_slot, has_other_processes};
 
     #[test]
     fn simultaneous_instances_receive_distinct_slots() {
@@ -421,7 +488,9 @@ mod tests {
 
         assert_eq!(first_slot, 0);
         assert_eq!(second_slot, 1);
+        assert!(has_other_processes(&directory, first_slot).unwrap());
         drop(second_lock);
+        assert!(!has_other_processes(&directory, first_slot).unwrap());
         drop(first_lock);
         std::fs::remove_dir_all(directory).unwrap();
     }
