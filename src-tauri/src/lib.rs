@@ -37,6 +37,7 @@ fn lock_is_busy(error: &io::Error) -> bool {
 /// 啟動時確認是否有另一個程序正在進行更新。
 /// 可取得鎖時立即釋放，讓正常啟動不會永久佔用更新鎖。
 pub(crate) fn update_is_in_progress(app_data_dir: &Path) -> io::Result<bool> {
+    fs::create_dir_all(app_data_dir)?;
     let lock_path = update_lock_path(app_data_dir);
     let file = OpenOptions::new()
         .create(true)
