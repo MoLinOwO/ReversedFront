@@ -83,12 +83,90 @@ fn download_client() -> Result<Client> {
         .build()?)
 }
 
-fn update_root(app: &AppHandle) -> Result<PathBuf> {
-    Ok(app
+pub(crate) fn update_root(app: &AppHandle) -> Result<PathBuf> {
+    // Mod 是隨應用程式散佈的前端資源，版本標記與更新後的 bundle
+    // 必須和安裝包內的 mod 放在一起，避免 AppData 與安裝目錄各自有一份。
+    let resource_root = if cfg!(debug_assertions) {
+        let mut project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        if project_root.ends_with("src-tauri") {
+            project_root.pop();
+        }
+        project_root.join("web")
+    } else {
+        app.path()
+            .resource_dir()
+            .context("無法取得應用程式安裝資源目錄")?
+    };
+
+    Ok(resource_root.join("mod"))
+}
+
+/// 將舊版放在 AppData 的 Mod 搬到安裝資源目錄。
+///
+/// 只在新的安裝目錄還沒有 update.json 時執行，避免覆蓋已經存在的版本。
+/// 舊目錄會保留作為備份，但之後不再被讀取或寫入。
+pub(crate) fn migrate_legacy_update_root(app: &AppHandle) -> Result<()> {
+    let target_root = update_root(app)?;
+    let target_state = target_root.join("update.json");
+    if target_state.exists() {
+        return Ok(());
+    }
+
+    let legacy_root = app
         .path()
         .app_data_dir()
-        .context("無法取得應用程式資料目錄")?
-        .join("mod"))
+        .context("無法取得舊版應用程式資料目錄")?
+        .join("mod");
+    let legacy_state = legacy_root.join("update.json");
+    let state_content = match fs::read_to_string(&legacy_state) {
+        Ok(content) => content,
+        Err(_) => return Ok(()),
+    };
+    let state = match serde_json::from_str::<UpdateState>(&state_content) {
+        Ok(state) if is_sha(&state.ref_name) => state,
+        _ => return Ok(()),
+    };
+
+    // 沒有完整的主 bundle 就不遷移，讓安裝包內建的 Mod 繼續生效。
+    if !legacy_root.join("js/main.bundle.js").is_file() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(&target_root)?;
+    copy_legacy_mod_tree(&legacy_root, &target_root, "")?;
+    fs::write(target_state, serde_json::to_vec_pretty(&state)?)?;
+    Ok(())
+}
+
+fn copy_legacy_mod_tree(source: &Path, target: &Path, relative: &str) -> Result<()> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let child_relative = if relative.is_empty() {
+            name.to_string()
+        } else {
+            format!("{relative}/{name}")
+        };
+        let child_source = entry.path();
+        let child_target = target.join(&child_relative);
+
+        if file_type.is_dir() {
+            copy_legacy_mod_tree(&child_source, target, &child_relative)?;
+        } else if file_type.is_file() && allowed_mod_relative_path(&child_relative) {
+            if let Some(parent) = child_target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(child_source, child_target)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn state_path(app: &AppHandle) -> Result<PathBuf> {

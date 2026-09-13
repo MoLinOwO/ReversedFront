@@ -274,9 +274,15 @@ pub fn run() {
             let resource_storage_root = runtime_storage_root(&web_root, &app_data_dir);
             config_manager::set_resource_base_path(resource_storage_root);
             config_manager::set_user_data_base_path(app_data_dir.clone());
-            let mod_update_root = app_data_dir.join("mod");
+            // Mod 更新檔案與 update.json 都和安裝包內的前端資源放在一起。
+            // 這樣載入來源、更新內容與版本標記不會分散在 AppData。
+            let mod_update_root = mod_updater::update_root(app.handle())
+                .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?;
             let _ = fs::create_dir_all(mod_update_root.join("js"));
             let _ = fs::create_dir_all(mod_update_root.join("data"));
+            if let Err(error) = mod_updater::migrate_legacy_update_root(app.handle()) {
+                eprintln!("Unable to migrate legacy Mod data: {error}");
+            }
 
             // Ensure config directory exists
             let config_dir = config_manager::get_hidden_config_dir("data");
