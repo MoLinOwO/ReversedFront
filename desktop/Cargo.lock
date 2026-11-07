@@ -5752,7 +5752,7 @@ dependencies = [
 
 [[package]]
 name = "rf-desktop"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "anyhow",
  "directories",

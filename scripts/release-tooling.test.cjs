@@ -147,7 +147,9 @@ test('standalone configs preserve runtime resources and embed WebView2 setup in 
   assert.equal(windows.binariesDir, path.join(projectRoot, 'desktop/target/debug'));
   assert.equal(windows.outDir, path.join(projectRoot, 'desktop/target/packages/debug'));
   assert.deepEqual(windows.icons, [path.join(projectRoot, 'desktop/icons/icon.ico')]);
-  const encoded = windows.nsis.preinstallSection.match(/-EncodedCommand ([A-Za-z0-9+/=]+)/)[1];
+  assert.ok(!windows.nsis.preinstallSection.includes('-EncodedCommand'));
+  assert.ok(windows.nsis.preinstallSection.includes('-File "$PLUGINSDIR\\rf-install-webview2.ps1"'));
+  const encoded = windows.wix.fragments[0].match(/-EncodedCommand ([A-Za-z0-9+/=]+)/)[1];
   assert.equal(Buffer.from(encoded, 'base64').toString('utf16le'), fs.readFileSync(path.join(projectRoot, 'scripts/install-webview2.ps1'), 'utf8'));
   assert.ok(windows.wix.fragments[0].includes('-EncodedCommand ' + encoded));
   assert.deepEqual(windows.wix.customActionRefs, ['RFInstallWebView2']);

@@ -21,21 +21,27 @@ function packagingConfig(root, { debug = false, target, formats } = {}, platform
   config.wix.template = path.join(root, config.wix.template);
 
   if (platform === 'win32') {
-    const script = fs.readFileSync(path.join(root, 'scripts/install-webview2.ps1'), 'utf8');
+    const scriptPath = path.join(root, 'scripts/install-webview2.ps1');
+    const script = fs.readFileSync(scriptPath, 'utf8');
     const encoded = Buffer.from(script, 'utf16le').toString('base64');
     const flags = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + encoded;
-    // Documented NSIS preinstallSection and WiX fragments share one signed bootstrapper.
+    // NSIS strings are limited to 1024 characters. Extract the complete script instead of encoding it inline.
     config.nsis.preinstallSection = [
       'Section WebView2',
-      "nsExec::ExecToStack /TIMEOUT=600000 '\"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe\" " + flags + "'",
+      'InitPluginsDir',
+      'File "/oname=$PLUGINSDIR\\rf-install-webview2.ps1" "' + scriptPath + '"',
+      "nsExec::ExecToStack /TIMEOUT=600000 '\"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$PLUGINSDIR\\rf-install-webview2.ps1\"'",
       'Pop $0',
       'Pop $1',
       'StrCmp $0 "0" rf_webview2_ready',
-      'MessageBox MB_ICONSTOP "WebView2 setup failed. Check your connection and retry: $1"',
+      'DetailPrint "WebView2 setup failed ($0): $1"',
+      'MessageBox MB_ICONSTOP "WebView2 setup failed ($0): $1" /SD IDOK',
+      'SetErrorLevel 1',
       'Abort',
       'rf_webview2_ready:',
       'SectionEnd'
     ].join('\n');
+    // MSI does not use the NSIS string stack; keep the shared script encoded in its custom action.
     config.wix.fragments = [
       '<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"><Fragment>' +
       '<CustomAction Id="RFInstallWebView2" Directory="INSTALLDIR" Execute="deferred" Impersonate="no" Return="check" ' +

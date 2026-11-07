@@ -1,6 +1,6 @@
 [package]
 name = "rf-desktop"
-version = "3.3.0"
+version = "3.3.1"
 description = "Reversed Front Desktop App"
 authors = ["you"]
 edition = "2021"

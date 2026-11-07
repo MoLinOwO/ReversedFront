@@ -65,6 +65,8 @@ node scripts/desktop-smoke.cjs --require-map
 安裝圖示使用有效的 `icon.png`（512×512）及 `icon.ico`，macOS ICNS 由打包器轉換。舊 `icon.icns` 實際為 ICO 格式，不可直接指定給 macOS 安裝包。
 打包時 Windows 只選 ICO，macOS／Linux 只選 PNG，避免 macOS 解碼舊 ICO 內的 RGB 圖片失敗；重建既有 3.3.0 標籤時由 workflow 套用相同選擇。
 
+3.3.1 修正 NSIS 的 1024 字元限制：WebView2 腳本以 `File` 內嵌並解至 `$PLUGINSDIR`，透過短 `-File` 指令執行，不再將完整 Base64 塞進 NSIS 指令。MSI 沿用同一來源腳本的完整編碼命令。`node --test scripts/windows-installer.test.cjs` 會實際編譯、執行隔離的 NSIS 前置程序，驗證長腳本、含空白路徑及失敗阻擋；不安裝遊戲或修改帳號資料。Windows CI 在打包器備妥 NSIS 後執行此檢查，通過才上傳。
+
 ## 平台限制及依據
 
 - Windows 使用 WebView2，按上游範例關閉 GPUI DirectComposition，讓原生子視窗正常顯示。

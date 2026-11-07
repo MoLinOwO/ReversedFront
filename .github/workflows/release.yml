@@ -121,6 +121,10 @@ jobs:
           node scripts/validate-release.cjs --resources
           node scripts/bundle.cjs --formats "${{ matrix.formats }}" ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
 
+      - name: Exercise Windows prerequisite installer
+        if: matrix.platform == 'windows-latest'
+        run: node --test scripts/windows-installer.test.cjs
+
       - name: Collect named installers
         run: node scripts/release-artifacts.cjs stage
 
