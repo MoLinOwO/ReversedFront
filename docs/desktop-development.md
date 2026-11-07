@@ -67,6 +67,8 @@ node scripts/desktop-smoke.cjs --require-map
 
 3.3.1 修正 NSIS 的 1024 字元限制：WebView2 腳本以 `File` 內嵌並解至 `$PLUGINSDIR`，透過短 `-File` 指令執行，不再將完整 Base64 塞進 NSIS 指令。MSI 沿用同一來源腳本的完整編碼命令。`node --test scripts/windows-installer.test.cjs` 會實際編譯、執行隔離的 NSIS 前置程序，驗證長腳本、含空白路徑及失敗阻擋；不安裝遊戲或修改帳號資料。Windows CI 在打包器備妥 NSIS 後執行此檢查，通過才上傳。
 
+CI 的 Rust 測試以 `RUST_TEST_THREADS=1` 依序執行：macOS 曾在子程序測試並行時出現槽位鎖釋放斷言失敗，因此先隔離測試程序的影響。槽位測試仍同時持有兩把鎖，保留全部斷言；若單獨執行仍失敗，須繼續調查，不以重試或延遲掩蓋。
+
 ## 平台限制及依據
 
 - Windows 使用 WebView2，按上游範例關閉 GPUI DirectComposition，讓原生子視窗正常顯示。

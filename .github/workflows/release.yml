@@ -87,6 +87,9 @@ jobs:
         run: npm ci
 
       - name: Test release validation, native bridge, tooling and Rust backend
+        # Keep the subprocess test separate from immediate file-lock release assertions.
+        env:
+          RUST_TEST_THREADS: '1'
         run: npm test
 
       # The public checkout contains compiled Mod bundles/data, not Mod source.
