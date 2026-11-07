@@ -12,16 +12,20 @@ jobs:
   build-and-release:
     env:
       RELEASE_TAG: ${{ github.ref_name }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: macos-latest
-            args: --target universal-apple-darwin
+            target: universal-apple-darwin
+            formats: app,dmg
           - platform: ubuntu-22.04
-            args: ''
+            target: ''
+            formats: appimage,deb
           - platform: windows-latest
-            args: ''
+            target: ''
+            formats: nsis,wix
 
     runs-on: ${{ matrix.platform }}
 
@@ -33,103 +37,76 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: npm
 
-      - name: Validate public release contents
-        run: node scripts/validate-release.cjs
+      # Tags must match checked-in versions; the release job never bumps them.
+      - name: Validate public release contents and tag
+        run: npm run validate:release
 
-      - name: Sync application version from tag
-        run: node scripts/set-version.cjs
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.1
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: desktop
 
+      # GPUI Kit 0.9 + lb-wry use Vulkan/X11 and WebKitGTK 4.1.
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            mold \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libwebkit2gtk-4.0-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libjavascriptcoregtk-4.0-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev \
-            libsoup-3.0-dev
+            gcc g++ clang cmake pkg-config mold \
+            libfontconfig1-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libwebkit2gtk-4.1-dev libssl-dev libzstd-dev libasound2-dev \
+            libvulkan1 librsvg2-dev patchelf libfuse2
 
-      - name: Install Tauri CLI
+      - name: Install build and installer tooling
         run: npm ci
 
-      # Mod 原始碼不放入公開 repository；已編譯的 bundle/data 直接隨應用程式打包。
-      - name: Build Tauri application
-        run: npx tauri build ${{ matrix.args }}
+      - name: Test release validation, native bridge, tooling and Rust backend
+        run: npm test
 
-      - name: Rename Windows artifacts
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $version = "$env:RELEASE_TAG"
-          $nsisDir = "src-tauri/target/release/bundle/nsis"
-          $msiDir = "src-tauri/target/release/bundle/msi"
+      # The public checkout contains compiled Mod bundles/data, not Mod source.
+      - name: Build GPUI application
+        if: matrix.platform != 'macos-latest'
+        run: npm run build
 
-          $nsis = Get-ChildItem $nsisDir -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($nsis) {
-            Move-Item $nsis.FullName (Join-Path $nsisDir "ReversedFront_$version.exe") -Force
-          }
-
-          $msi = Get-ChildItem $msiDir -Filter *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($msi) {
-            Move-Item $msi.FullName (Join-Path $msiDir "ReversedFront_$version.msi") -Force
-          }
-
-      - name: Rename Linux artifacts
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          set -e
-          deb_file=$(find src-tauri/target -path '*/bundle/deb/*.deb' | head -n 1 || true)
-          if [ -n "$deb_file" ]; then
-            mv "$deb_file" "$(dirname "$deb_file")/ReversedFront_${RELEASE_TAG}.deb"
-          fi
-
-          appimage_file=$(find src-tauri/target -path '*/bundle/appimage/*.AppImage' | head -n 1 || true)
-          if [ -n "$appimage_file" ]; then
-            mv "$appimage_file" "$(dirname "$appimage_file")/ReversedFront_${RELEASE_TAG}.AppImage"
-          fi
-
-      - name: Rename macOS artifacts
+      - name: Build universal macOS GPUI application
         if: matrix.platform == 'macos-latest'
         run: |
-          set -e
-          dmg_file=$(find src-tauri/target -path '*/bundle/dmg/*.dmg' | head -n 1 || true)
-          if [ -n "$dmg_file" ]; then
-            mv "$dmg_file" "$(dirname "$dmg_file")/ReversedFront_${RELEASE_TAG}.dmg"
-          fi
+          set -euo pipefail
+          npm run build -- --target aarch64-apple-darwin
+          npm run build -- --target x86_64-apple-darwin
+          mkdir -p desktop/target/universal-apple-darwin/release
+          lipo -create \
+            desktop/target/aarch64-apple-darwin/release/rf-desktop \
+            desktop/target/x86_64-apple-darwin/release/rf-desktop \
+            -output desktop/target/universal-apple-darwin/release/rf-desktop
+          lipo -verify_arch arm64 x86_64 desktop/target/universal-apple-darwin/release/rf-desktop
 
-          app_file=$(find src-tauri/target -path '*/bundle/macos/*.app.tar.gz' | head -n 1 || true)
-          if [ -n "$app_file" ]; then
-            mv "$app_file" "$(dirname "$app_file")/ReversedFront_${RELEASE_TAG}.app.tar.gz"
-          fi
+      # Cargo builds GPUI; the standalone packager creates installers.
+      # Our updater selects the actual published platform installers.
+      - name: Bundle existing executable
+        run: |
+          node scripts/validate-release.cjs --resources
+          node scripts/bundle.cjs --formats "${{ matrix.formats }}" ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+
+      - name: Collect named installers
+        run: node scripts/release-artifacts.cjs stage
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            src-tauri/target/**/bundle/deb/*.deb
-            src-tauri/target/**/bundle/appimage/*.AppImage
-            src-tauri/target/**/bundle/msi/*.msi
-            src-tauri/target/**/bundle/nsis/*.exe
-            src-tauri/target/**/bundle/dmg/*.dmg
-            src-tauri/target/**/bundle/macos/*.app.tar.gz
+          draft: true
+          name: ReversedFront ${{ env.RELEASE_TAG }}
+          body_path: docs/releases/${{ env.RELEASE_TAG }}.md
+          fail_on_unmatched_files: true
+          files: desktop/target/release-assets/*
 
   publish-update-manifest:
     needs: build-and-release
@@ -137,51 +114,47 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.ref_name }}
       COMMIT_SHA: ${{ github.sha }}
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # fallback 更新只發布編譯後的 Mod bundle 與公開資料，不包含原始 JS。
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Validate public release contents and tag
+        run: npm run validate:release
+
+      # The same allowlist excludes config/accounts/DBs and includes chunk licenses.
       - name: Package compiled Mod
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p mod-package/js mod-package/data
-          cp web/mod/js/*.bundle.js mod-package/js/
-          find web/mod/data -maxdepth 1 -type f \( \
-            -name '*.yaml' -o -name '*.yml' -o -name '*.json' -o -name '*.svg' \
-          \) -exec cp {} mod-package/data/ \;
-          (cd mod-package && zip -qr "../ReversedFront_Mod_${RELEASE_TAG}.zip" js data)
+          node scripts/release-artifacts.cjs mod
+          (cd desktop/target/release-mod && zip -qr "../release-assets-mod.zip" js data)
+          mv desktop/target/release-assets-mod.zip "ReversedFront_Mod_$RELEASE_TAG.zip"
 
-      - name: Generate static update manifest
+      # Require published platform installers; include app archives only when present.
+      - name: Generate static update manifest from published installers
         shell: bash
         run: |
           set -euo pipefail
-          release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
-          cat > update.json <<EOF
-          {
-            "tag_name": "${RELEASE_TAG}",
-            "assets": [
-              {"name": "ReversedFront_${RELEASE_TAG}.exe", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.exe"},
-              {"name": "ReversedFront_${RELEASE_TAG}.msi", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.msi"},
-              {"name": "ReversedFront_${RELEASE_TAG}.AppImage", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.AppImage"},
-              {"name": "ReversedFront_${RELEASE_TAG}.deb", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.deb"},
-              {"name": "ReversedFront_${RELEASE_TAG}.dmg", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.dmg"},
-              {"name": "ReversedFront_${RELEASE_TAG}.app.tar.gz", "browser_download_url": "${release_base}/ReversedFront_${RELEASE_TAG}.app.tar.gz"}
-            ],
-            "mod": {
-              "remoteRef": "${COMMIT_SHA}",
-              "downloadUrl": "${release_base}/ReversedFront_Mod_${RELEASE_TAG}.zip",
-              "filename": "ReversedFront_Mod_${RELEASE_TAG}.zip"
-            }
-          }
-          EOF
-          node -e "JSON.parse(require('fs').readFileSync('update.json', 'utf8'))"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            | node scripts/release-artifacts.cjs manifest
 
       - name: Publish static update manifest and Mod archive
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
+          name: ReversedFront ${{ env.RELEASE_TAG }}
+          body_path: docs/releases/${{ env.RELEASE_TAG }}.md
+          fail_on_unmatched_files: true
           files: |
             update.json
             ReversedFront_Mod_${{ env.RELEASE_TAG }}.zip
+
+      - name: Publish complete release
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest

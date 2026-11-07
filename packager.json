@@ -1,0 +1,82 @@
+{
+  "name": "rf-desktop",
+  "productName": "ReversedFront",
+  "version": "3.3.0",
+  "identifier": "com.reversedfront.desktop",
+  "description": "Reversed Front Desktop App",
+  "publisher": "reversedfront",
+  "binariesDir": "desktop/target/release",
+  "binaries": [
+    {
+      "path": "rf-desktop",
+      "main": true
+    }
+  ],
+  "outDir": "desktop/target/packages/release",
+  "icons": [
+    "desktop/icons/icon.png",
+    "desktop/icons/icon.ico"
+  ],
+  "resources": [
+    {
+      "src": "desktop/resources/index.html",
+      "target": "index.html"
+    },
+    {
+      "src": "desktop/resources/desktop_bridge.js",
+      "target": "desktop_bridge.js"
+    },
+    {
+      "src": "desktop/resources/favicon.ico",
+      "target": "favicon.ico"
+    },
+    {
+      "src": "desktop/resources/transporter.html",
+      "target": "transporter.html"
+    },
+    {
+      "src": "desktop/resources/static",
+      "target": "static"
+    },
+    {
+      "src": "desktop/resources/tiles",
+      "target": "tiles"
+    },
+    {
+      "src": "desktop/resources/mod",
+      "target": "mod"
+    }
+  ],
+  "nsis": {
+    "installMode": "currentUser"
+  },
+  "wix": {
+    "template": "scripts/windows-installer.wxs"
+  },
+  "macos": {
+    "minimumSystemVersion": "15.0"
+  },
+  "deb": {
+    "depends": [
+      "libfontconfig1",
+      "libgtk-3-0",
+      "libvulkan1",
+      "libwayland-client0",
+      "libwebkit2gtk-4.1-0",
+      "libx11-xcb1",
+      "libxkbcommon-x11-0"
+    ]
+  },
+  "appimage": {
+    "libs": [
+      "libgtk-3.so.0",
+      "libwebkit2gtk-4.1.so.0"
+    ],
+    "files": {
+      "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1": "usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
+    },
+    "linuxdeployPlugins": {
+      "gtk": "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh"
+    }
+  }
+}

@@ -1,15 +1,17 @@
 {
   "name": "rf-desktop",
-  "version": "3.2.7",
+  "version": "3.3.0",
   "description": "Reversed Front desktop application shell for the latest RF web build",
   "main": "index.js",
   "scripts": {
-    "tauri": "tauri",
-    "build": "tauri build",
-    "dev": "tauri dev",
+    "build": "cargo build --manifest-path desktop/Cargo.toml --locked --bin rf-desktop --release",
+    "dev": "cargo run --manifest-path desktop/Cargo.toml --locked --bin rf-desktop",
+    "bundle": "node scripts/validate-release.cjs --resources && node scripts/bundle.cjs",
     "mod:build": "webpack --config web/mod/webpack.config.cjs --mode production",
     "validate:release": "node scripts/validate-release.cjs",
-    "test": "npm run validate:release && cargo test --manifest-path src-tauri/Cargo.toml"
+    "test:native-bridge": "node --test scripts/native-bridge.test.cjs",
+    "test:tooling": "node --test scripts/release-tooling.test.cjs",
+    "test": "npm run validate:release && npm run test:native-bridge && npm run test:tooling && cargo test --manifest-path desktop/Cargo.toml --locked --no-default-features --lib"
   },
   "repository": {
     "type": "git",
@@ -30,7 +32,7 @@
   "devDependencies": {
     "@babel/core": "^7.28.5",
     "@babel/preset-env": "^7.28.5",
-    "@tauri-apps/cli": "^2.9.6",
+    "@crabnebula/packager": "0.11.2",
     "babel-loader": "^10.0.0",
     "terser-webpack-plugin": "^5.3.16",
     "webpack": "^5.104.1",

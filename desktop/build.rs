@@ -43,7 +43,7 @@ fn main() {
     }
     fs::create_dir_all(&resources_path).expect("Failed to create resources dir");
 
-    // Copy specific directories and files from web/ to src-tauri/resources/
+    // Copy specific directories and files from web/ to desktop/resources/.
     let dirs_to_copy = vec!["tiles", "static"];
     let files_to_copy = vec![
         "index.html",
@@ -106,7 +106,14 @@ fn main() {
         copy_dir_recursive(&mod_data_src, &mod_data_dst).expect("Failed to copy mod/data");
     }
 
-    tauri_build::build()
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        winresource::WindowsResource::new()
+            .set_icon("icons/icon.ico")
+            .set("ProductName", "ReversedFront")
+            .set("FileDescription", "ReversedFront")
+            .compile()
+            .expect("Failed to compile Windows resources");
+    }
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {

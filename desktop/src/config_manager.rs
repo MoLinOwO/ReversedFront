@@ -45,11 +45,7 @@ pub fn get_hidden_config_dir(target: &str) -> PathBuf {
     // Dev mode: use local web folder
     #[cfg(debug_assertions)]
     {
-        let mut path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        if path.ends_with("src-tauri") {
-            path.pop();
-        }
-        path.push("web");
+        let mut path = get_resource_base_dir();
         if target == "root" {
             // Return web root
         } else {
@@ -60,13 +56,13 @@ pub fn get_hidden_config_dir(target: &str) -> PathBuf {
         path
     }
 
-    // Release mode: use Tauri resource directory or exe parent
+    // Release mode: use the host's writable data root or exe parent.
     #[cfg(not(debug_assertions))]
     {
         let mut path = if let Some(base) = USER_DATA_BASE_PATH.get() {
             base.clone()
         } else if let Some(base) = RESOURCE_BASE_PATH.get() {
-            // Tauri resource_dir 已經是正確的根目錄
+            // 原生主機已選定可寫入的執行期根目錄。
             base.clone()
         } else {
             // Fallback: use exe parent directory
@@ -132,7 +128,7 @@ pub fn load_config() -> Value {
         let mut root_config = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         #[cfg(debug_assertions)]
         {
-            if root_config.ends_with("src-tauri") {
+            if root_config.ends_with("desktop") {
                 root_config.pop();
             }
         }

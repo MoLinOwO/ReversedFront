@@ -1,3 +1,4 @@
+use crate::host::DesktopHost;
 use fs2::FileExt;
 use regex::Regex;
 use reqwest::Client;
@@ -8,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
 
 const REPOSITORY: &str = "MoLinOwO/ReversedFront";
 const RELEASES_API_URL: &str =
@@ -140,18 +140,17 @@ fn download_client() -> Result<Client, String> {
         .map_err(|e| e.to_string())
 }
 
-fn download_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let directory = app
-        .path()
-        .download_dir()
-        .map_err(|e| format!("無法取得系統下載目錄：{}", e))?;
+fn download_dir() -> Result<PathBuf, String> {
+    let directory = directories::UserDirs::new()
+        .and_then(|dirs| dirs.download_dir().map(Path::to_path_buf))
+        .ok_or_else(|| "無法取得系統下載目錄".to_string())?;
     fs::create_dir_all(&directory)
         .map_err(|e| format!("無法建立系統下載目錄 {}：{}", directory.display(), e))?;
     Ok(directory)
 }
 
-fn save_download_file(app: &AppHandle, filename: &str, content: &[u8]) -> Result<PathBuf, String> {
-    let directory = download_dir(app)?;
+fn save_download_file(filename: &str, content: &[u8]) -> Result<PathBuf, String> {
+    let directory = download_dir()?;
     let destination = directory.join(filename);
     let partial = directory.join(format!(".{filename}.part-{}", std::process::id()));
 
@@ -182,7 +181,7 @@ struct StandaloneUpdateArgs {
 }
 
 /// 如果目前程序是由自己啟動的獨立更新模式，執行更新後直接結束，
-/// 不要建立 Tauri 視窗。回傳 true 代表 main 不應再啟動遊戲。
+/// 不要建立遊戲視窗。回傳 true 代表 main 不應再啟動遊戲。
 pub fn run_standalone_update_if_requested() -> bool {
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new(STANDALONE_UPDATE_FLAG)) {
@@ -616,17 +615,19 @@ pub fn cleanup_old_installers() {
     }
 }
 
-pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> Result<(), String> {
+pub async fn download_and_install(
+    host: &DesktopHost,
+    url: &str,
+    filename: &str,
+) -> Result<(), String> {
     validate_download_request(url, filename)?;
 
-    let app_state = app.state::<crate::AppState>();
-    let app_data_dir = app_state.app_data_dir.clone();
-    let current_slot = app_state.process_slot;
-    drop(app_state);
+    let app_data_dir = &host.app_data_dir;
+    let current_slot = host.process_slot;
 
-    let update_lock_path = crate::update_lock_path(&app_data_dir);
+    let update_lock_path = crate::update_lock_path(app_data_dir);
     let update_guard = acquire_update_lock(&update_lock_path)?;
-    if crate::has_other_processes(&app_data_dir, current_slot)
+    if crate::has_other_processes(app_data_dir, current_slot)
         .map_err(|error| format!("無法檢查其他 ReversedFront 程序：{}", error))?
     {
         return Err("偵測到其他 ReversedFront 視窗，請先關閉其他視窗後再更新".to_string());
@@ -652,7 +653,7 @@ pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> 
         .map_err(|e| format!("Failed to read update: {}", e))?;
 
     // 更新安裝檔放在系統下載目錄，讓使用者可以保留並檢查實際下載的檔案。
-    let installer_path = save_download_file(&app, filename, &content)?;
+    let installer_path = save_download_file(filename, &content)?;
 
     #[cfg(unix)]
     if installer_path.extension().and_then(|ext| ext.to_str()) == Some("AppImage") {
@@ -666,7 +667,7 @@ pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> 
     }
 
     // 下載期間若有其他程序剛好完成啟動，第二次檢查仍會阻止安裝。
-    if crate::has_other_processes(&app_data_dir, current_slot)
+    if crate::has_other_processes(app_data_dir, current_slot)
         .map_err(|error| format!("無法檢查其他 ReversedFront 程序：{}", error))?
     {
         return Err(
@@ -680,7 +681,7 @@ pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> 
         .parent()
         .ok_or_else(|| "無法取得 ReversedFront 安裝目錄".to_string())?
         .to_path_buf();
-    let wait_lock_path = download_dir(&app)?.join(format!(
+    let wait_lock_path = download_dir()?.join(format!(
         ".reversedfront-update-parent-{}.lock",
         std::process::id()
     ));
@@ -697,7 +698,7 @@ pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> 
 
     // 更新程序不能直接執行目前的 rf-desktop.exe，否則 Windows 會因為
     // 更新器本身仍鎖住該檔案而無法替換。複製到下載目錄後再以副本接手。
-    let helper_path = download_dir(&app)?.join(format!(
+    let helper_path = download_dir()?.join(format!(
         ".reversedfront-updater-{}{}",
         std::process::id(),
         current_exe
@@ -711,7 +712,11 @@ pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> 
 
     // 由同一個執行檔以無介面的更新模式接手，避免正在執行的程序
     // 直接啟動安裝程式時還持續鎖住自己的檔案。
-    Command::new(&helper_path)
+    let mut held_guards = host
+        .hold_update_guards
+        .lock()
+        .map_err(|_| "無法保留更新等待鎖".to_string())?;
+    let mut helper = Command::new(&helper_path)
         .arg(STANDALONE_UPDATE_FLAG)
         .arg(UPDATE_WAIT_LOCK_ARG)
         .arg(&wait_lock_path)
@@ -731,13 +736,21 @@ pub async fn download_and_install(app: AppHandle, url: &str, filename: &str) -> 
             format!("無法啟動獨立更新程序：{}", error)
         })?;
 
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.close();
+    let previous_guard_count = held_guards.len();
+    held_guards.extend([parent_lock, update_guard]);
+    if let Err(error) = host.request_exit() {
+        // Keep both locks until the helper is stopped; otherwise it could
+        // begin installing while the UI process is still alive.
+        helper
+            .kill()
+            .and_then(|_| helper.wait().map(|_| ()))
+            .map_err(|stop_error| format!("{error}；無法停止更新程序：{stop_error}"))?;
+        held_guards.truncate(previous_guard_count);
+        let _ = fs::remove_file(&helper_path);
+        let _ = fs::remove_file(&wait_lock_path);
+        return Err(error);
     }
 
-    app.exit(0);
-    drop(parent_lock);
-    drop(update_guard);
     Ok(())
 }
 

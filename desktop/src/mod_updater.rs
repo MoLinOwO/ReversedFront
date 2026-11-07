@@ -1,3 +1,4 @@
+use crate::host::DesktopHost;
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use reqwest::Client;
@@ -10,7 +11,6 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
 use zip::ZipArchive;
 
 const REPOSITORY: &str = "MoLinOwO/ReversedFront";
@@ -83,14 +83,16 @@ fn download_client() -> Result<Client> {
         .build()?)
 }
 
-fn download_dir(app: &AppHandle) -> Result<PathBuf> {
-    let directory = app.path().download_dir().context("無法取得系統下載目錄")?;
+fn download_dir() -> Result<PathBuf> {
+    let directory = directories::UserDirs::new()
+        .and_then(|dirs| dirs.download_dir().map(Path::to_path_buf))
+        .context("無法取得系統下載目錄")?;
     fs::create_dir_all(&directory)?;
     Ok(directory)
 }
 
-fn save_download_file(app: &AppHandle, filename: &str, content: &[u8]) -> Result<PathBuf> {
-    let directory = download_dir(app)?;
+fn save_download_file(filename: &str, content: &[u8]) -> Result<PathBuf> {
+    let directory = download_dir()?;
     let destination = directory.join(filename);
     let partial = directory.join(format!(".{filename}.part-{}", std::process::id()));
 
@@ -105,48 +107,32 @@ fn save_download_file(app: &AppHandle, filename: &str, content: &[u8]) -> Result
     Ok(destination)
 }
 
-fn staging_dir(app: &AppHandle, remote_ref: &str) -> Result<PathBuf> {
+fn staging_dir(remote_ref: &str) -> Result<PathBuf> {
     let sequence = UPDATE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    Ok(download_dir(app)?.join(format!(
+    Ok(download_dir()?.join(format!(
         ".reversedfront-mod-staging-{remote_ref}-{}-{sequence}",
         std::process::id()
     )))
 }
 
-pub(crate) fn update_root(app: &AppHandle) -> Result<PathBuf> {
+pub(crate) fn update_root(host: &DesktopHost) -> Result<PathBuf> {
     // Mod 是隨應用程式散佈的前端資源，版本標記與更新後的 bundle
     // 必須和安裝包內的 mod 放在一起，避免 AppData 與安裝目錄各自有一份。
-    let resource_root = if cfg!(debug_assertions) {
-        let mut project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        if project_root.ends_with("src-tauri") {
-            project_root.pop();
-        }
-        project_root.join("web")
-    } else {
-        app.path()
-            .resource_dir()
-            .context("無法取得應用程式安裝資源目錄")?
-    };
-
-    Ok(resource_root.join("mod"))
+    Ok(host.resource_root.join("mod"))
 }
 
 /// 將舊版放在 AppData 的 Mod 搬到安裝資源目錄。
 ///
 /// 只在新的安裝目錄還沒有 update.json 時執行，避免覆蓋已經存在的版本。
 /// 舊目錄會保留作為備份，但之後不再被讀取或寫入。
-pub(crate) fn migrate_legacy_update_root(app: &AppHandle) -> Result<()> {
-    let target_root = update_root(app)?;
+pub(crate) fn migrate_legacy_update_root(host: &DesktopHost) -> Result<()> {
+    let target_root = update_root(host)?;
     let target_state = target_root.join("update.json");
     if target_state.exists() {
         return Ok(());
     }
 
-    let legacy_root = app
-        .path()
-        .app_data_dir()
-        .context("無法取得舊版應用程式資料目錄")?
-        .join("mod");
+    let legacy_root = host.app_data_dir.join("mod");
     let legacy_state = legacy_root.join("update.json");
     let state_content = match fs::read_to_string(&legacy_state) {
         Ok(content) => content,
@@ -199,12 +185,12 @@ fn copy_legacy_mod_tree(source: &Path, target: &Path, relative: &str) -> Result<
     Ok(())
 }
 
-fn state_path(app: &AppHandle) -> Result<PathBuf> {
-    Ok(update_root(app)?.join("update.json"))
+fn state_path(host: &DesktopHost) -> Result<PathBuf> {
+    Ok(update_root(host)?.join("update.json"))
 }
 
-fn local_ref(app: &AppHandle) -> Result<String> {
-    let path = state_path(app)?;
+fn local_ref(host: &DesktopHost) -> Result<String> {
+    let path = state_path(host)?;
     if let Ok(content) = fs::read_to_string(path) {
         if let Ok(state) = serde_json::from_str::<UpdateState>(&content) {
             if is_sha(&state.ref_name) {
@@ -245,12 +231,12 @@ fn safe_relative_path(path: &str) -> Option<&str> {
     Some(relative)
 }
 
-pub async fn check_for_update(app: &AppHandle) -> Result<Value, String> {
+pub async fn check_for_update(host: &DesktopHost) -> Result<Value, String> {
     let client = client().map_err(|e| e.to_string())?;
-    match check_for_update_from_api(app, &client).await {
+    match check_for_update_from_api(host, &client).await {
         Ok(info) => Ok(info),
         Err(api_error) => {
-            check_for_update_from_manifest(app, &client)
+            check_for_update_from_manifest(host, &client)
                 .await
                 .map_err(|manifest_error| {
                     format!(
@@ -262,7 +248,7 @@ pub async fn check_for_update(app: &AppHandle) -> Result<Value, String> {
     }
 }
 
-async fn check_for_update_from_api(app: &AppHandle, client: &Client) -> Result<Value> {
+async fn check_for_update_from_api(host: &DesktopHost, client: &Client) -> Result<Value> {
     let remote = client
         .get(format!("{API_BASE}/commits/main"))
         .send()
@@ -275,7 +261,7 @@ async fn check_for_update_from_api(app: &AppHandle, client: &Client) -> Result<V
         bail!("GitHub 回傳的版本識別碼格式錯誤");
     }
 
-    let current = local_ref(app)?;
+    let current = local_ref(host)?;
     Ok(json!({
         "hasUpdate": current != remote.sha,
         "currentRef": current,
@@ -285,7 +271,7 @@ async fn check_for_update_from_api(app: &AppHandle, client: &Client) -> Result<V
     }))
 }
 
-async fn check_for_update_from_manifest(app: &AppHandle, client: &Client) -> Result<Value> {
+async fn check_for_update_from_manifest(host: &DesktopHost, client: &Client) -> Result<Value> {
     let response = client
         .get(STATIC_UPDATE_MANIFEST_URL)
         .header("Cache-Control", "no-cache")
@@ -299,7 +285,7 @@ async fn check_for_update_from_manifest(app: &AppHandle, client: &Client) -> Res
         bail!("靜態更新描述檔的 Mod 版本識別碼格式錯誤");
     }
 
-    let current = local_ref(app)?;
+    let current = local_ref(host)?;
     Ok(json!({
         "hasUpdate": current != mod_update.remote_ref,
         "currentRef": current,
@@ -312,7 +298,7 @@ async fn check_for_update_from_manifest(app: &AppHandle, client: &Client) -> Res
 }
 
 pub async fn download_and_install(
-    app: &AppHandle,
+    host: &DesktopHost,
     remote_ref: &str,
     download_url: Option<&str>,
     filename: Option<&str>,
@@ -320,14 +306,14 @@ pub async fn download_and_install(
     if download_url.is_some() || filename.is_some() {
         let download_url = download_url.ok_or_else(|| "缺少 Mod 更新下載網址".to_string())?;
         let filename = filename.ok_or_else(|| "缺少 Mod 更新檔名".to_string())?;
-        return download_archive_and_install(app, remote_ref, download_url, filename).await;
+        return download_archive_and_install(host, remote_ref, download_url, filename).await;
     }
 
     if !is_sha(remote_ref) {
         return Err("更新版本識別碼格式錯誤".to_string());
     }
 
-    let result = download_and_install_inner(app, remote_ref).await;
+    let result = download_and_install_inner(host, remote_ref).await;
     result.map_err(|e| e.to_string())
 }
 
@@ -375,7 +361,7 @@ fn safe_archive_relative_path(path: &str) -> Option<&str> {
 }
 
 async fn download_archive_and_install(
-    app: &AppHandle,
+    host: &DesktopHost,
     remote_ref: &str,
     url: &str,
     filename: &str,
@@ -403,10 +389,10 @@ async fn download_archive_and_install(
     }
 
     // Mod 更新包保留在系統下載目錄，方便使用者查閱或重新套用。
-    let download_path = save_download_file(app, filename, &bytes)
-        .map_err(|e| format!("儲存 Mod 更新包失敗：{}", e))?;
-    let root = update_root(app).map_err(|e| e.to_string())?;
-    let stage = staging_dir(app, remote_ref).map_err(|e| e.to_string())?;
+    let download_path =
+        save_download_file(filename, &bytes).map_err(|e| format!("儲存 Mod 更新包失敗：{}", e))?;
+    let root = update_root(host).map_err(|e| e.to_string())?;
+    let stage = staging_dir(remote_ref).map_err(|e| e.to_string())?;
     fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
 
     let mut archive = ZipArchive::new(Cursor::new(bytes))
@@ -469,10 +455,10 @@ async fn download_archive_and_install(
     copy_staged_files(&stage, &root).map_err(|e| e.to_string())?;
     fs::remove_dir_all(&stage).map_err(|e| e.to_string())?;
 
-    if let Some(parent) = state_path(app).map_err(|e| e.to_string())?.parent() {
+    if let Some(parent) = state_path(host).map_err(|e| e.to_string())?.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let state_path = state_path(app).map_err(|e| e.to_string())?;
+    let state_path = state_path(host).map_err(|e| e.to_string())?;
     fs::write(
         state_path,
         serde_json::to_vec_pretty(&UpdateState {
@@ -493,7 +479,7 @@ async fn download_archive_and_install(
     }))
 }
 
-async fn download_and_install_inner(app: &AppHandle, remote_ref: &str) -> Result<Value> {
+async fn download_and_install_inner(host: &DesktopHost, remote_ref: &str) -> Result<Value> {
     let client = client()?;
     let tree = client
         .get(format!("{API_BASE}/git/trees/{remote_ref}?recursive=1"))
@@ -527,8 +513,8 @@ async fn download_and_install_inner(app: &AppHandle, remote_ref: &str) -> Result
         }
     }
 
-    let root = update_root(app)?;
-    let stage = staging_dir(app, remote_ref)?;
+    let root = update_root(host)?;
+    let stage = staging_dir(remote_ref)?;
     fs::create_dir_all(&stage)?;
 
     // 所有檔案先下載到 staging，完整成功後才套用，避免網路中斷留下半套 Mod。
@@ -588,11 +574,11 @@ async fn download_and_install_inner(app: &AppHandle, remote_ref: &str) -> Result
     copy_staged_files(&stage, &root)?;
     fs::remove_dir_all(&stage)?;
 
-    if let Some(parent) = state_path(app)?.parent() {
+    if let Some(parent) = state_path(host)?.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(
-        state_path(app)?,
+        state_path(host)?,
         serde_json::to_vec_pretty(&UpdateState {
             ref_name: remote_ref.to_string(),
         })?,

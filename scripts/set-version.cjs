@@ -1,49 +1,44 @@
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
 
-const tag = process.env.RELEASE_TAG || process.argv[2] || '';
-const version = tag.replace(/^v/i, '').trim();
+function setVersion(root, tag) {
+  const version = tag.replace(/^v/i, '').trim();
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error('Invalid release tag: ' + tag);
+  }
+  const read = file => fs.readFileSync(path.join(root, file), 'utf8');
+  const pkg = JSON.parse(read('package.json'));
+  const lock = JSON.parse(read('package-lock.json'));
+  const config = JSON.parse(read('packager.json'));
+  const cargo = read('desktop/Cargo.toml');
+  const cargoLock = read('desktop/Cargo.lock');
+  const packageSection = cargo.match(/^\[package\]\r?\n[\s\S]*?(?=^\[|(?![\s\S]))/m)?.[0];
+  const versionPattern = /(^version\s*=\s*")[^"]+(")/m;
+  const lockPattern = /(\[\[package\]\]\r?\nname\s*=\s*"rf-desktop"\r?\nversion\s*=\s*")[^"]+(")/g;
+  if (!packageSection || !versionPattern.test(packageSection) || [...cargoLock.matchAll(lockPattern)].length !== 1) {
+    throw new Error('Expected one rf-desktop package version in Cargo.toml and Cargo.lock');
+  }
+  const updatedCargo = cargo.replace(packageSection,
+    packageSection.replace(versionPattern, (_, prefix, suffix) => prefix + version + suffix));
+  const updatedLock = cargoLock.replace(lockPattern, (_, prefix, suffix) => prefix + version + suffix);
 
-if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
-    throw new Error(`Invalid release tag: ${tag}`);
+  // Validate every input before writing; only the root package lock entry changes.
+  pkg.version = version;
+  lock.version = version;
+  if (!lock.packages?.['']) throw new Error('Missing npm root lockfile entry');
+  lock.packages[''].version = version;
+  config.version = version;
+  for (const [file, value] of [['package.json', pkg], ['package-lock.json', lock], ['packager.json', config]]) {
+    fs.writeFileSync(path.join(root, file), JSON.stringify(value, null, 2) + '\n');
+  }
+  fs.writeFileSync(path.join(root, 'desktop/Cargo.toml'), updatedCargo);
+  fs.writeFileSync(path.join(root, 'desktop/Cargo.lock'), updatedLock);
+  return version;
 }
 
-const root = path.resolve(__dirname, '..');
-
-function readJson(file) {
-    return JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
+if (require.main === module) {
+  const version = setVersion(path.resolve(__dirname, '..'), process.env.RELEASE_TAG || process.argv[2] || '');
+  console.log('Release version set to ' + version);
 }
 
-function writeJson(file, value) {
-    fs.writeFileSync(path.join(root, file), `${JSON.stringify(value, null, 2)}\n`);
-}
-
-const packageJson = readJson('package.json');
-packageJson.version = version;
-writeJson('package.json', packageJson);
-
-const lockFile = path.join(root, 'package-lock.json');
-if (fs.existsSync(lockFile)) {
-    const lockJson = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
-    if (lockJson.packages && lockJson.packages['']) {
-        lockJson.packages[''].version = version;
-    }
-    lockJson.version = lockJson.version || 3;
-    writeJson('package-lock.json', lockJson);
-}
-
-const tauriConfigPath = path.join(root, 'src-tauri', 'tauri.conf.json');
-const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8'));
-tauriConfig.version = version;
-fs.writeFileSync(tauriConfigPath, `${JSON.stringify(tauriConfig, null, 2)}\n`);
-
-const cargoPath = path.join(root, 'src-tauri', 'Cargo.toml');
-const cargo = fs.readFileSync(cargoPath, 'utf8');
-const cargoVersionPattern = /^version\s*=\s*"[^"]+"/m;
-if (!cargoVersionPattern.test(cargo)) {
-    throw new Error('Could not update src-tauri/Cargo.toml package version');
-}
-const updatedCargo = cargo.replace(cargoVersionPattern, `version = "${version}"`);
-fs.writeFileSync(cargoPath, updatedCargo);
-
-console.log(`Release version set to ${version}`);
+module.exports = { setVersion };

@@ -1,6 +1,6 @@
 // Desktop compatibility layer for the current mobile-first RF bundle.
 // The official web bundle expects a small native object to exist when it is
-// running inside the Android WebView. Tauri supplies the real desktop APIs;
+// running inside the Android WebView. The GPUI host supplies the desktop APIs;
 // this file only supplies the missing mobile-shaped values and callbacks.
 (function () {
   'use strict';
@@ -66,9 +66,9 @@
     }));
   }
 
-  function invokeTauri(command, args) {
-    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-      return window.__TAURI__.core.invoke(command, args || {});
+  function invokeDesktop(command, args) {
+    if (typeof window.__RF_DESKTOP__?.invoke === 'function') {
+      return window.__RF_DESKTOP__.invoke(command, args || {});
     }
     return Promise.resolve(null);
   }
@@ -85,21 +85,21 @@
       window.localStorage.setItem(localeKey, normalizedLocale);
       window.localStorage.setItem(i18nextLocaleKey, normalizedLocale);
     } catch (_) {}
-    invokeTauri('save_locale', { locale: normalizedLocale }).catch(function () {});
+    invokeDesktop('save_locale', { locale: normalizedLocale }).catch(function () {});
   }
 
   // localStorage is only a fast hint.  The shared SQLite state is authoritative
   // so a new process slot or a second window uses the same language.
   function loadPersistedLocale() {
-    if (!window.__TAURI__ || !window.__TAURI__.core || !window.__TAURI__.core.invoke) {
+    if (typeof window.__RF_DESKTOP__?.invoke !== 'function') {
       return;
     }
-    invokeTauri('get_locale').then(function (savedLocale) {
+    invokeDesktop('get_locale').then(function (savedLocale) {
       if (!savedLocale) {
         // Migrate a preference created by v3.2.4 or an older WebView profile
         // into the shared database without overwriting it with zh_TW.
         if (storedLocale) {
-          invokeTauri('save_locale', { locale: locale }).catch(function () {});
+          invokeDesktop('save_locale', { locale: locale }).catch(function () {});
         }
         return;
       }
@@ -136,16 +136,16 @@
     }).catch(function () {});
   }
 
-  // Tauri normally injects __TAURI__ before this script.  The short retry also
-  // covers hosts where the bridge becomes available just after page startup.
+  // The native host injects __RF_DESKTOP__ before this script. The short
+  // retry covers hosts where it becomes available just after page startup.
   loadPersistedLocale();
   window.setTimeout(loadPersistedLocale, 250);
 
-  // 玩家大廳由桌面端交給作業系統的預設瀏覽器開啟，避免 Tauri WebView
+  // 玩家大廳由桌面端交給作業系統的預設瀏覽器開啟，避免原生 WebView
   // 將 window.open 當成應用程式內的新視窗而被攔截或留在空白頁。
   function openExternalUrl(url) {
-    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-      window.__TAURI__.core.invoke('open_external_url', { url: url }).catch(function () {
+    if (typeof window.__RF_DESKTOP__?.invoke === 'function') {
+      window.__RF_DESKTOP__.invoke('open_external_url', { url: url }).catch(function () {
         openInGameOverlay(url, 'Discord 社群', 'Discord 社群', true);
       });
       return;
@@ -398,7 +398,7 @@
             preloadImages(message.data && message.data.preloadImages);
             break;
           case 'APP:exit':
-            invokeTauri('exit_app');
+            invokeDesktop('exit_app');
             break;
           case 'APP:openUrl':
             // 官方前端的 lobby_url 可能由舊伺服器資料提供，桌面版統一
