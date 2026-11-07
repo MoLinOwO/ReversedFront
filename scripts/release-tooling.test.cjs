@@ -146,6 +146,7 @@ test('standalone configs preserve runtime resources and embed WebView2 setup in 
   assert.deepEqual(windows.formats, ['nsis', 'wix']);
   assert.equal(windows.binariesDir, path.join(projectRoot, 'desktop/target/debug'));
   assert.equal(windows.outDir, path.join(projectRoot, 'desktop/target/packages/debug'));
+  assert.deepEqual(windows.icons, [path.join(projectRoot, 'desktop/icons/icon.ico')]);
   const encoded = windows.nsis.preinstallSection.match(/-EncodedCommand ([A-Za-z0-9+/=]+)/)[1];
   assert.equal(Buffer.from(encoded, 'base64').toString('utf16le'), fs.readFileSync(path.join(projectRoot, 'scripts/install-webview2.ps1'), 'utf8'));
   assert.ok(windows.wix.fragments[0].includes('-EncodedCommand ' + encoded));
@@ -160,4 +161,9 @@ test('standalone configs preserve runtime resources and embed WebView2 setup in 
   const mac = packagingConfig(projectRoot, { target: 'universal-apple-darwin' }, 'darwin');
   assert.equal(mac.targetTriple, 'universal-apple-darwin');
   assert.equal(mac.macos.minimumSystemVersion, '15.0');
+  assert.deepEqual(mac.icons, [path.join(projectRoot, 'desktop/icons/icon.png')]);
+  assert.deepEqual(linux.icons, mac.icons);
+  const png = fs.readFileSync(mac.icons[0]);
+  assert.equal(png.subarray(1, 4).toString(), 'PNG');
+  assert.equal(png[25], 6, 'ICNS conversion requires the RGBA PNG, not the RGB ICO payload');
 });

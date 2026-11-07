@@ -63,6 +63,7 @@ node scripts/desktop-smoke.cjs --require-map
 獨立打包器已成功產生 Windows 開發測試用 NSIS／MSI，MSI 內容檢查未發現帳號庫、私人設定、憑證或 source map。這些測試包位於 `desktop/target/packages/debug/`，尚未安裝、發布，不能當作正式 Release 散佈。MSI 升級識別依既有工具的預設算法保留；跨版本實際安裝仍須另行驗證。
 
 安裝圖示使用有效的 `icon.png`（512×512）及 `icon.ico`，macOS ICNS 由打包器轉換。舊 `icon.icns` 實際為 ICO 格式，不可直接指定給 macOS 安裝包。
+打包時 Windows 只選 ICO，macOS／Linux 只選 PNG，避免 macOS 解碼舊 ICO 內的 RGB 圖片失敗；重建既有 3.3.0 標籤時由 workflow 套用相同選擇。
 
 ## 平台限制及依據
 

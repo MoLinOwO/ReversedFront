@@ -70,6 +70,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
+          cache-on-failure: true
 
       # GPUI Kit 0.9 + lb-wry use Vulkan/X11 and WebKitGTK 4.1.
       - name: Install Linux dependencies
@@ -109,6 +110,11 @@ jobs:
 
       # Cargo builds GPUI; the standalone packager creates installers.
       # Our updater selects the actual published platform installers.
+      # ponytail: v3.3.0 predates platform icon filtering; remove when no longer rebuilding this tag.
+      - name: Select macOS icon for the existing 3.3.0 tag
+        if: matrix.platform == 'macos-latest' && env.RELEASE_TAG == 'v3.3.0'
+        run: node -e "const fs=require('fs'),p='packager.json',c=JSON.parse(fs.readFileSync(p,'utf8'));c.icons=c.icons.filter(i=>i.endsWith('.png'));fs.writeFileSync(p,JSON.stringify(c,null,2));"
+
       - name: Bundle existing executable
         run: |
           node -e "const fs=require('fs'); for (const dir of ['desktop/target/packages/release','desktop/target/release-assets']) fs.rmSync(dir,{recursive:true,force:true});"

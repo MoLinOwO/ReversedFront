@@ -14,7 +14,9 @@ function packagingConfig(root, { debug = false, target, formats } = {}, platform
   }[platform];
   if (!config.formats?.length) throw new Error('Unsupported packaging platform: ' + platform);
   if (target) config.targetTriple = target;
-  config.icons = config.icons.map(icon => path.join(root, icon));
+  // macOS's ICNS generator cannot decode the legacy RGB PNG inside our Windows ICO.
+  config.icons = config.icons.filter(icon => icon.endsWith(platform === 'win32' ? '.ico' : '.png'))
+    .map(icon => path.join(root, icon));
   config.resources = config.resources.map(resource => ({ ...resource, src: path.join(root, resource.src) }));
   config.wix.template = path.join(root, config.wix.template);
 
