@@ -47,6 +47,8 @@ Rust 由 `rust-toolchain.toml` 固定為 1.99.1。Mod 原始碼只留本機；�
 
 若草稿版本因發布流程失敗，可修正 main 的 workflow，再從 Actions 的 Release → Run workflow 輸入既有 tag。流程會重新 checkout 該 tag，桌面內嵌 Mod ref 與更新清單也使用該 tag 的 commit；不需要改寫已推送標籤。macOS `lipo -verify_arch` 的輸入檔必須放在旗標之前。
 
+三個平台已上傳完成時，可勾選 `publish_only` 只重試 Mod／更新清單及公開步驟；完整性檢查仍要求所有平台安裝包齊全。草稿需從 Release 列表取得 ID，且下載網址使用暫時的 `untagged-*`；產生更新清單前轉為正式 tag 網址，再由既有驗證器檢查來源、名稱及上傳狀態。
+
 Windows 可選擇在啟動前設定 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9227`，再於另一個終端執行：
 
 ```sh

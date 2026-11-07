@@ -10,6 +10,10 @@ on:
         description: Existing release tag to build
         required: true
         type: string
+      publish_only:
+        description: Retry publication of an already built draft
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
@@ -20,6 +24,7 @@ permissions:
 
 jobs:
   build-and-release:
+    if: ${{ !inputs.publish_only }}
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       MACOSX_DEPLOYMENT_TARGET: '15.0'
@@ -125,6 +130,7 @@ jobs:
 
   publish-update-manifest:
     needs: build-and-release
+    if: ${{ !cancelled() && (needs.build-and-release.result == 'success' || inputs.publish_only) }}
     runs-on: ubuntu-22.04
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -153,12 +159,16 @@ jobs:
           (cd desktop/target/release-mod && zip -qr "../release-assets-mod.zip" js data)
           mv desktop/target/release-assets-mod.zip "ReversedFront_Mod_$RELEASE_TAG.zip"
 
-      # Require published platform installers; include app archives only when present.
-      - name: Generate static update manifest from published installers
+      # Tag lookup omits drafts; resolve the draft ID and its future public URLs.
+      - name: Generate static update manifest from draft installers
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+          release_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$RELEASE_TAG\" and .draft == true) | .id")
+          [[ "$release_id" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            --jq ".assets |= map(.browser_download_url |= sub(\"/download/untagged-[^/]+/\"; \"/download/$RELEASE_TAG/\"))" \
             | COMMIT_SHA="$(git rev-parse HEAD)" node scripts/release-artifacts.cjs manifest
 
       - name: Publish static update manifest and Mod archive
