@@ -45,6 +45,8 @@ Rust 由 `rust-toolchain.toml` 固定為 1.99.1。Mod 原始碼只留本機；�
 
 正式發布前使用 `node scripts/set-version.cjs vX.Y.Z` 同步 npm、packager、Cargo 及 lockfile 版號，新增 `docs/releases/vX.Y.Z.md` 更新說明，再提交已編譯 Mod。GitHub 工作流程要求 tag 和已提交版號一致；各平台產物先存為 Release 草稿，待更新清單與 Mod 上傳完成才正式公開，避免使用者收到不完整版本。
 
+若草稿版本因發布流程失敗，可修正 main 的 workflow，再從 Actions 的 Release → Run workflow 輸入既有 tag。流程會重新 checkout 該 tag，桌面內嵌 Mod ref 與更新清單也使用該 tag 的 commit；不需要改寫已推送標籤。macOS `lipo -verify_arch` 的輸入檔必須放在旗標之前。
+
 Windows 可選擇在啟動前設定 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9227`，再於另一個終端執行：
 
 ```sh

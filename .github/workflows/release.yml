@@ -4,6 +4,16 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -11,7 +21,7 @@ permissions:
 jobs:
   build-and-release:
     env:
-      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       MACOSX_DEPLOYMENT_TARGET: '15.0'
     strategy:
       fail-fast: false
@@ -32,6 +42,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -74,25 +86,27 @@ jobs:
       # The public checkout contains compiled Mod bundles/data, not Mod source.
       - name: Build GPUI application
         if: matrix.platform != 'macos-latest'
-        run: npm run build
+        shell: bash
+        run: GITHUB_SHA="$(git rev-parse HEAD)" npm run build
 
       - name: Build universal macOS GPUI application
         if: matrix.platform == 'macos-latest'
         run: |
           set -euo pipefail
-          npm run build -- --target aarch64-apple-darwin
-          npm run build -- --target x86_64-apple-darwin
+          GITHUB_SHA="$(git rev-parse HEAD)" npm run build -- --target aarch64-apple-darwin
+          GITHUB_SHA="$(git rev-parse HEAD)" npm run build -- --target x86_64-apple-darwin
           mkdir -p desktop/target/universal-apple-darwin/release
           lipo -create \
             desktop/target/aarch64-apple-darwin/release/rf-desktop \
             desktop/target/x86_64-apple-darwin/release/rf-desktop \
             -output desktop/target/universal-apple-darwin/release/rf-desktop
-          lipo -verify_arch arm64 x86_64 desktop/target/universal-apple-darwin/release/rf-desktop
+          lipo desktop/target/universal-apple-darwin/release/rf-desktop -verify_arch arm64 x86_64
 
       # Cargo builds GPUI; the standalone packager creates installers.
       # Our updater selects the actual published platform installers.
       - name: Bundle existing executable
         run: |
+          node -e "const fs=require('fs'); for (const dir of ['desktop/target/packages/release','desktop/target/release-assets']) fs.rmSync(dir,{recursive:true,force:true});"
           node scripts/validate-release.cjs --resources
           node scripts/bundle.cjs --formats "${{ matrix.formats }}" ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
 
@@ -103,6 +117,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          tag_name: ${{ env.RELEASE_TAG }}
           name: ReversedFront ${{ env.RELEASE_TAG }}
           body_path: docs/releases/${{ env.RELEASE_TAG }}.md
           fail_on_unmatched_files: true
@@ -112,13 +127,14 @@ jobs:
     needs: build-and-release
     runs-on: ubuntu-22.04
     env:
-      RELEASE_TAG: ${{ github.ref_name }}
-      COMMIT_SHA: ${{ github.sha }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -143,12 +159,13 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
-            | node scripts/release-artifacts.cjs manifest
+            | COMMIT_SHA="$(git rev-parse HEAD)" node scripts/release-artifacts.cjs manifest
 
       - name: Publish static update manifest and Mod archive
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          tag_name: ${{ env.RELEASE_TAG }}
           name: ReversedFront ${{ env.RELEASE_TAG }}
           body_path: docs/releases/${{ env.RELEASE_TAG }}.md
           fail_on_unmatched_files: true
